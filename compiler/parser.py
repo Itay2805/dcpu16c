@@ -107,22 +107,22 @@ class Parser(Tokenizer):
             self.report_error(f'expected expression before {self.token}')
 
     def _parse_postfix(self):
-        expr = self._parse_literal()
+        e = self._parse_literal()
 
         pos = self.token.pos
         if self.match_token('++'):
-            if not expr.is_lvalue():
+            if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as increment operand')
-            expr = ExprPostfix(self._expand_pos(pos, self.token.pos), '++', expr)
+            e = ExprPostfix(self._expand_pos(e.pos, pos), '++', e)
 
         elif self.match_token('--'):
-            if not expr.is_lvalue():
+            if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as decrement operand')
-            expr = ExprPostfix(self._expand_pos(pos, self.token.pos), '--', expr)
+            e = ExprPostfix(self._expand_pos(e.pos, pos), '--', e)
 
-        return expr
+        return e
 
     def _parse_prefix(self):
         pos = self.token.pos
@@ -133,45 +133,48 @@ class Parser(Tokenizer):
             if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as unary `&` operand')
-            return ExprAddrOf(self._expand_pos(pos, self.token.pos), e)
+            return ExprAddrOf(self._expand_pos(pos, e.pos), e)
 
         elif self.match_token('*'):
             e = self._parse_prefix()
             typ = e.resolve_type(self.current_function)
+            pos = self._expand_pos(pos, e.pos)
             if not isinstance(typ, CPointer):
                 self.token.pos = pos
                 self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
-            return ExprDeref(self._expand_pos(pos, self.token.pos), e)
+            return ExprDeref(pos, e)
 
         elif self.match_token('~'):
             e = self._parse_prefix()
             typ = e.resolve_type(self.current_function)
+            pos = self._expand_pos(pos, e.pos)
             if not isinstance(typ, CInteger):
                 self.token.pos = pos
                 self.report_error(f'invalid type argument of unary `~` (have `{typ}`)')
-            return ExprUnary(self._expand_pos(pos, self.token.pos), '~', e)
+            return ExprUnary(pos, '~', e)
 
         elif self.match_token('!'):
             e = self._parse_prefix()
             typ = e.resolve_type(self.current_function)
+            pos = self._expand_pos(pos, e.pos)
             if not isinstance(typ, CInteger):
                 self.token.pos = pos
                 self.report_error(f'invalid type argument of unary `!` (have `{typ}`)')
-            return ExprUnary(self._expand_pos(pos, self.token.pos), '!', e)
+            return ExprUnary(pos, '!', e)
 
         elif self.match_token('++'):
             e = self._parse_prefix()
             if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as decrement operand')
-            return ExprUnary(self._expand_pos(pos, self.token.pos), '++', e)
+            return ExprUnary(self._expand_pos(pos, e.pos), '++', e)
 
         elif self.match_token('--'):
             e = self._parse_prefix()
             if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as increment operand')
-            return ExprUnary(self._expand_pos(pos, self.token.pos), '--', e)
+            return ExprUnary(self._expand_pos(pos, e.pos), '--', e)
 
         # Size-of
         elif self.match_keyword('sizeof'):
@@ -370,21 +373,22 @@ class Parser(Tokenizer):
             return stmt
 
     def _parse_type(self, raise_error):
+        typ = None
         if self.match_keyword('unsigned'):
             if self.is_keyword('int') or self.is_keyword('char') or self.is_keyword('short'):
                 self.next_token()
-            return CInteger(16, False)
+            typ = CInteger(16, False)
 
         elif self.match_keyword('signed'):
             if self.is_keyword('int') or self.is_keyword('char') or self.is_keyword('short'):
                 self.next_token()
-            return CInteger(16, True)
+            typ = CInteger(16, True)
 
         elif self.match_keyword('int') or self.match_keyword('short'):
-            return CInteger(16, True)
+            typ = CInteger(16, True)
 
         elif self.match_keyword('char'):
-            return CInteger(16, False)
+            typ = CInteger(16, False)
 
         elif self.match_keyword('struct'):
             name, pos = self.expect_ident()
@@ -399,7 +403,7 @@ class Parser(Tokenizer):
             assert False
 
         elif self.match_keyword('void'):
-            return CVoid()
+            typ = CVoid()
 
         elif self.is_token(IdentToken):
             name, pos = self.expect_ident()
@@ -414,6 +418,11 @@ class Parser(Tokenizer):
                 self.expect_ident()
             else:
                 return None
+
+        while self.match_token('*'):
+            typ = CPointer(typ)
+
+        return typ
 
     def _parse_func(self, is_static: bool):
         func = FunctionDeclaration()

@@ -112,23 +112,38 @@ class ExprDeref(Expr):
     def is_lvalue(self):
         return True
 
-    def addrof(self, asm: Assembler):
+    def _recursive_access_optimizer(self, asm: Assembler, expr: Expr):
         # Optimize addrof expressions by returning the address as a RegisterOffset instead of a value
-        if isinstance(self.expr, ExprAddrOf):
-            return self.expr.expr.addrof(asm)
+        if isinstance(expr, ExprAddrOf):
+            return expr.expr.addrof(asm)
 
         # Optimize *(ptr + num) if the num is a constant
-        elif isinstance(self.expr, ExprBinary) and (self.expr.op == '+' or self.expr.op == '-') and self.expr.right.is_pure():
-            addr = ExprDeref(None, self.expr.left).addrof(asm)
+        elif isinstance(expr, ExprBinary) and (expr.op == '+' or expr.op == '-') and expr.right.is_pure():
+            size = expr.left.resolve_type(asm.current_function).sizeof()
+            offset = expr.right.eval() * size
+
+            addr = self._recursive_access_optimizer(asm, expr.left)
             if isinstance(addr, RegisterOffset):
-                addr.offset += self.expr.right.eval()
+                addr.offset += offset
                 return addr
             else:
-                return RegisterOffset(addr, self.expr.right.eval())
+                if addr is None:
+                    addr = asm.allocate_temp()
+                expr.left.compile(asm, addr)
+                return RegisterOffset(addr, offset)
 
         # Otherwise just return whatever the addrof the expression returns
         else:
-            return self.expr.addrof(asm)
+            return None
+
+    def addrof(self, asm: Assembler):
+        ret = self._recursive_access_optimizer(asm, self.expr)
+        if ret is None:
+            temp = asm.allocate_temp()
+            self.expr.compile(asm, temp)
+            return temp
+        else:
+            return ret
 
     def compile(self, asm: Assembler, operand):
         self.expr.compile(asm, operand)
@@ -304,10 +319,6 @@ class ExprBinary(Expr):
 
         # relational
         elif self.op in ['<', '>', '==', '!=', '<=', '>=']:
-            # TODO: support signed operands
-            # TODO: can probably optimize more by not allocating an
-            #       operand if our operand is none
-
             # Eval both sides
             if self.left.is_pure():
                 left_res = self.left.eval()
@@ -353,6 +364,7 @@ class ExprBinary(Expr):
 
             # Store it
             asm.load(operand, addr)
+            asm.free_temp(addr)
 
         # normal math
         else:

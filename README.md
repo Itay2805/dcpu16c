@@ -10,8 +10,10 @@ that I can port easily I will just create my own :shrug:
 * Functions
 * Variables (must be declared at start of function)
 * All binary and unary operators
-* Basic type checking
+    * pointer arith is kinda broken on types which are not 16bit
+* type checking
 * if and else
+* while loop
 * return
 * pointers
 * casts

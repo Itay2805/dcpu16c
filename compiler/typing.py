@@ -41,7 +41,7 @@ class CPointer(CType):
         self.type = typ
 
     def sizeof(self):
-        return 2
+        return 1
 
     def __eq__(self, other):
         if isinstance(other, CPointer):
