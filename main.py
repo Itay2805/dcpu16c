@@ -6,9 +6,9 @@ if __name__ == '__main__':
 void another_function();
 
 void main() {
-    int a = 12;
+    int a = 0;
     
-    a += 123;
+    *(&a + 1) = 123;
 }
 """)
     print(parser.parse().compile())

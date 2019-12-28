@@ -11,6 +11,7 @@ class Expr:
     def eval(self):
         assert False
 
+    # TODO: maybe add the operand location?
     def addrof(self, asm: Assembler):
         assert False
 
@@ -87,11 +88,11 @@ class ExprAddrOf(Expr):
         assert self.expr.is_lvalue()
         storage = self.expr.addrof(asm)
 
-        if isinstance(storage, StackAddress):
-            asm.load(operand, 'SP')
+        if isinstance(storage, RegisterOffset):
+            asm.load(operand, storage.reg)
             if storage.offset != 0:
                 asm.append(f'ADD {operand}, {storage.offset}')
-
+            asm.free_temp(storage)
         else:
             assert False
 
@@ -107,6 +108,27 @@ class ExprDeref(Expr):
 
     def resolve_type(self, func):
         return self.expr.resolve_type(func).type
+
+    def is_lvalue(self):
+        return True
+
+    def addrof(self, asm: Assembler):
+        # Optimize addrof expressions by returning the address as a RegisterOffset instead of a value
+        if isinstance(self.expr, ExprAddrOf):
+            return self.expr.expr.addrof(asm)
+
+        # Optimize *(ptr + num) if the num is a constant
+        elif isinstance(self.expr, ExprBinary) and (self.expr.op == '+' or self.expr.op == '-') and self.expr.right.is_pure():
+            addr = ExprDeref(None, self.expr.left).addrof(asm)
+            if isinstance(addr, RegisterOffset):
+                addr.offset += self.expr.right.eval()
+                return addr
+            else:
+                return RegisterOffset(addr, self.expr.right.eval())
+
+        # Otherwise just return whatever the addrof the expression returns
+        else:
+            return self.expr.addrof(asm)
 
     def compile(self, asm: Assembler, operand):
         self.expr.compile(asm, operand)
@@ -137,23 +159,29 @@ class ExprUnary(Expr):
         else:
             if self.op == '~':
                 self.expr.compile(asm, operand)
-                asm.append(f'XOR {operand}, 0xFFFF')
+                if operand is not None:
+                    asm.append(f'XOR {operand}, 0xFFFF')
 
             elif self.op == '!':
                 temp = asm.allocate_temp()
                 self.expr.compile(asm, temp)
-                asm.append(f'SET {operand}, 0')
-                asm.append(f'IFE {temp}, 0')
-                asm.append(f'SET {operand}, 1')
+                if operand is not None:
+                    asm.load(operand, 0)
+                    asm.append(f'IFE {temp}, 0')
+                    asm.load(operand, 1)
                 asm.free_temp(temp)
 
             elif self.op == '--':
-                asm.append(f'SUB {self.expr.addrof(asm)}, 1')
-                asm.load(operand, self.expr.addrof(asm))
+                addr = self.expr.addrof(asm)
+                asm.append(f'SUB {addr}, 1')
+                asm.load(operand, addr)
+                asm.free_temp(addr)
 
             elif self.op == '++':
-                asm.append(f'ADD {self.expr.addrof(asm)}, 1')
-                asm.load(operand, self.expr.addrof(asm))
+                addr = self.expr.addrof(asm)
+                asm.append(f'ADD {addr}, 1')
+                asm.load(operand, addr)
+                asm.free_temp(addr)
 
 
 class ExprPostfix(Expr):
@@ -171,13 +199,16 @@ class ExprPostfix(Expr):
             asm.load(operand, self.eval())
         else:
             if self.op == '--':
-                asm.load(operand, self.expr.addrof(asm))
-                asm.append(f'SUB {self.expr.addrof(asm)}, 1')
+                addr = self.expr.addrof(asm)
+                asm.load(operand, addr)
+                asm.append(f'SUB {addr}, 1')
+                asm.free_temp(addr)
 
             elif self.op == '++':
-                asm.load(operand, self.expr.addrof(asm))
-                asm.append(f'ADD {self.expr.addrof(asm)}, 1')
-
+                addr = self.expr.addrof(asm)
+                asm.load(operand, addr)
+                asm.append(f'ADD {addr}, 1')
+                asm.free_temp(addr)
 
 
 class ExprBinary(Expr):
