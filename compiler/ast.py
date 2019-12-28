@@ -300,6 +300,36 @@ class StmtIf(Stmt):
                 asm.label(else_label)
 
 
+class StmtWhile(Stmt):
+
+    def __init__(self, cond: Expr, stmt: Stmt):
+        self.cond = cond
+        self.stmt = stmt
+
+    def compile(self, asm: Assembler):
+        if self.cond.is_pure():
+            # Infinite loop
+            if self.cond.eval() != 0:
+                start = asm.temp_label()
+                asm.label(start)
+                self.stmt.compile(asm)
+                asm.append(f'SET PC, {start}')
+
+        else:
+            end = asm.temp_label()
+            check = asm.temp_label()
+
+            asm.label(check)
+            temp = asm.allocate_temp()
+            self.cond.compile(asm, temp)
+            asm.append(f'IFE {temp}, 0')
+            asm.append(f'SET PC, {end}')
+            asm.free_temp(temp)
+            self.stmt.compile(asm)
+            asm.append(f'SET PC, {check}')
+            asm.label(end)
+
+
 class StmtReturn(Stmt):
 
     def __init__(self):

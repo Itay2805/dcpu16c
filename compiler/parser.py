@@ -69,6 +69,9 @@ class Parser(Tokenizer):
             '<<': INT_MATRIX
         }
 
+        if op[-1] == '=':
+            op = op[:-1]
+
         for el in OP[op]:
             if isinstance(t1, el[0]) and isinstance(t2, el[1]):
                 return
@@ -224,7 +227,7 @@ class Parser(Tokenizer):
         if self.is_token('=') or self.is_token('+=') or self.is_token('-=') or self.is_token('*=') or \
                 self.is_token('/=') or self.is_token('%=') or self.is_token('>>=') or self.is_token('<<=') or \
                 self.is_token('&=') or self.is_token('^=') or self.is_token('|='):
-            op = self.token.value
+            op = self.token
 
             if not e1.is_lvalue():
                 self.report_error('lvalue required as left operand of assignment')
@@ -232,7 +235,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_assignment()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
 
         return e1
 
@@ -264,16 +267,20 @@ class Parser(Tokenizer):
             return StmtIf(cond, true_stmt, false_stmt)
 
         elif self.match_keyword('for'):
-            pass
+            assert False
 
         elif self.match_keyword('while'):
-            pass
+            self.expect_token('(')
+            cond = self._parse_expr()
+            self.expect_token(')')
+            stmt = self._parse_stmt()
+            return StmtWhile(cond, stmt)
 
         elif self.match_keyword('do'):
-            pass
+            assert False
 
         elif self.match_keyword('switch'):
-            pass
+            assert False
 
         elif self.match_keyword('return'):
             stmt = StmtReturn()
