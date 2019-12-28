@@ -143,10 +143,10 @@ class Assembler:
         # Clean the pushed arguments
         if callconv == CallingConv.STACK_CALL:
             if argcount > 0:
-                self.append(f'SUB SP, {argcount}')
+                self.append(f'ADD SP, {argcount}')
         elif callconv == CallingConv.REGISTER_CALL:
             if argcount > 3:
-                self.append(f'SUB SP, {argcount - 3}')
+                self.append(f'ADD SP, {argcount - 3}')
         else:
             assert False
 
@@ -285,10 +285,31 @@ class Assembler:
         else:
             assert False
 
+    def put_int(self, i):
+        if self.syntax == AssemblerSyntax.DASM16:
+            self.code.append(f'DAT {i}')
+        elif self.syntax == AssemblerSyntax.SCA:
+            pass
+        else:
+            assert False
+
     def append(self, line):
         self.code.append('\t' + line)
 
     def generate(self):
         if self.current_function is not None:
             self._fixup_last_function()
+
+        # TODO: there are some stuff which can probably be done on
+        #       the assembly level as optimizations
+
+        halt = self.temp_label()
+        self.code.insert(0, 'JSR main')
+        if self.syntax == AssemblerSyntax.DASM16:
+            self.code.insert(1, f':{halt}')
+        elif self.syntax == AssemblerSyntax.SCA:
+            self.code.insert(1, f'{halt}:')
+        self.code.insert(2, f'\tSET PC, {halt}')
+        self.code.insert(3, '')
+
         return '\n'.join(self.code)

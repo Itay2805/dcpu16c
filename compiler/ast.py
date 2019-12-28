@@ -58,7 +58,11 @@ class ExprIdentLiteral(Expr):
         if var is not None:
             return var.storage
         else:
-            assert False
+            var = asm.current_function.unit.get_symbol(self.name)
+            if var is not None:
+                return var.storage
+            else:
+                assert False
 
     def resolve_type(self, func):
         var = func.get_var(self.name)
@@ -67,7 +71,10 @@ class ExprIdentLiteral(Expr):
         else:
             typ = func.unit.get_symbol(self.name)
             assert typ is not None
-            return typ
+            if isinstance(typ, FunctionDeclaration):
+                return typ
+            else:
+                assert False
 
     def is_lvalue(self):
         return True
@@ -587,6 +594,11 @@ class FunctionDeclaration:
                 return arg
         if name in self.vars:
             return self.vars[name]
+
+        glob = self.unit.get_symbol(name)
+        if glob is not None and isinstance(glob, VariableDeclaration):
+            return glob
+
         return None
 
     def compile(self, asm: Assembler):
@@ -602,11 +614,15 @@ class FunctionDeclaration:
 class CompilationUnit:
 
     def __init__(self):
-        self.symbols = {}  # type: Dict[str, Union[FunctionDeclaration]]
+        self.symbols = {}  # type: Dict[str, FunctionDeclaration or VariableDeclaration]
 
     def add_symbol(self, symbol):
 
         if isinstance(symbol, FunctionDeclaration):
+            assert symbol.name not in self.symbols
+            self.symbols[symbol.name] = symbol
+
+        elif isinstance(symbol, VariableDeclaration):
             assert symbol.name not in self.symbols
             self.symbols[symbol.name] = symbol
 
@@ -625,5 +641,16 @@ class CompilationUnit:
     def compile(self):
         asm = Assembler(AssemblerSyntax.DASM16)
         for symbol in self.symbols:
-            self.symbols[symbol].compile(asm)
+            symbol = self.symbols[symbol]
+            if isinstance(symbol, FunctionDeclaration):
+                symbol.compile(asm)
+            elif isinstance(symbol, VariableDeclaration):
+                asm.label(symbol.name)
+                symbol.storage = '[' + symbol.name + ']'
+                if symbol.expr is not None:
+                    asm.put_int(symbol.expr.eval())
+                else:
+                    asm.put_int(0)
+            else:
+                assert False
         return asm.generate()

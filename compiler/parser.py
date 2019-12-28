@@ -585,7 +585,7 @@ class Parser(Tokenizer):
 
                 # Get the name, making sure there is no definition of it already
                 self.push()
-                name, pos = self.expect_ident()
+                name, name_pos = self.expect_ident()
 
                 # Check if a function
                 if self.is_token('('):
@@ -598,7 +598,7 @@ class Parser(Tokenizer):
                         if orig_func is not None:
                             # Prev is a full function
                             if orig_func.stmts is not None:
-                                self.token.pos = pos
+                                self.token.pos = name_pos
                                 self.report_error(f'redefinition of `{name}`')
 
                             # prev is a prototype
@@ -619,6 +619,30 @@ class Parser(Tokenizer):
 
                 # Assume global variable instead
                 else:
-                    assert False
+                    def parse_decl():
+                        expr = None
+
+                        # Check the name
+                        if self.unit.get_symbol(name) is not None:
+                            self.token.pos = name_pos
+                            self.report_error(f'redefinition of `{name}`')
+
+                        # parse expression if any
+                        if self.match_token('='):
+                            expr = self._parse_expr()
+                            if not expr.is_pure():
+                                self.token.pos = expr.pos
+                                self.report_error('initializer element is not constant')
+
+                        # add the symbol
+                        self.unit.add_symbol(VariableDeclaration(name, typ, expr))
+
+                    # parse all decls
+                    parse_decl()
+                    while self.match_token(','):
+                        name, name_pos = self.expect_ident()
+                        parse_decl()
+
+                    self.expect_token(';')
 
         return self.unit
