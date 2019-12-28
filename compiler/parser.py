@@ -8,10 +8,279 @@ class Parser(Tokenizer):
     def __init__(self, code: str, filename: str = "<unknown>"):
         super(Parser, self).__init__(code, filename)
         self.next_token()
-        self.unit = CompilationUnit()
-        self.current_function = None
 
-        self.lines = code.splitlines()
+        self._scopes = []  # type: List[Dict[str, Identifier]]
+        self.func_list = []  # type: List[Function]
+        self._fun = None  # type: Function
+        self._temp_counter = 0
+
+    ####################################################################################################################
+    # AST Level optimizations
+    ####################################################################################################################
+
+    def _find_pure_functions(self):
+        for f in self.func_list:
+            f.pure_known = False
+            f.pure = False
+
+        def check_function(f):
+
+            if f.pure_known:
+                return False
+
+            unknown_functions = [False]
+            side_effects = False
+
+            def check_side_effects(expr, lvalue=False):
+                # Iterate all the expressions
+                if isinstance(expr, ExprComma):
+                    for e in expr.exprs:
+                        if check_side_effects(e):
+                            return True
+                    return False
+                elif isinstance(expr, ExprCopy):
+                    return check_side_effects(expr.destination, True) or check_side_effects(expr.source)
+                elif isinstance(expr, ExprBinary):
+                    return check_side_effects(expr.right) or check_side_effects(expr.left)
+                elif isinstance(expr, ExprLoop):
+                    return check_side_effects(expr.cond) or check_side_effects(expr.body)
+                elif isinstance(expr, ExprAddrof):
+                    return check_side_effects(expr.expr)
+
+                # if this is an lvalue and we have a deref we assume side effects
+                elif isinstance(expr, ExprDeref):
+                    if lvalue:
+                        return True
+                    else:
+                        return check_side_effects(expr.expr)
+
+                elif isinstance(expr, ExprCall):
+                    if check_side_effects(expr.func):
+                        return True
+
+                    for arg in expr.args:
+                        if check_side_effects(arg):
+                            return True
+
+                    # assume indirect function calls have side effects
+                    if not isinstance(expr.func, ExprIdent) or not isinstance(expr.func.ident, FunctionIdentifier):
+                        return True
+                    func = self.func_list[expr.func.ident.index]
+
+                    # This function has side effects
+                    if func.pure_known and not func.pure:
+                        return True
+
+                    if not func.pure_known and func.name != f.name:
+                        unknown_functions[0] = True
+
+                else:
+                    return False
+
+            side_effects = check_side_effects(f.code)
+
+            if side_effects or not unknown_functions[0]:
+                f.pure_known = True
+                f.pure = not side_effects
+                return True
+
+            return False
+
+        # Iterate until no improvements are found
+        count = 0
+
+        for f in self.func_list:
+            if check_function(f):
+                count += 1
+
+        while count != 0:
+            count = 0
+            for f in self.func_list:
+                if check_function(f):
+                    count += 1
+
+    def _constant_fold(self, expr, stmt):
+        if isinstance(expr, ExprComma):
+            new_exprs = []
+            for i, e in enumerate(expr.exprs):
+                e = self._constant_fold(e, False)
+
+                # If we got to a return just don't continue
+                if isinstance(e, ExprReturn):
+                    new_exprs.append(e)
+                    break
+
+                elif isinstance(e, ExprLoop):
+                    # Break on loops that never exit
+                    if isinstance(e.cond, ExprNumber) and e.cond.value != 0:
+                        new_exprs.append(e.body)
+                        break
+
+                # Ignore nops
+                elif isinstance(e, ExprNop):
+                    continue
+
+                # only add if has side effects
+                else:
+                    # inside statements we only append non-pure nodes
+                    if stmt:
+                        if not e.is_pure(self):
+                            new_exprs.append(e)
+
+                    # Outside of that only add non-pure and the last element
+                    else:
+                        if not e.is_pure(self) or i == len(expr.exprs) - 1:
+                            new_exprs.append(e)
+
+            if len(new_exprs) == 0:
+                return ExprNop()
+
+            if len(new_exprs) == 1:
+                return new_exprs[0]
+
+            expr.exprs = new_exprs
+            return expr
+
+        elif isinstance(expr, ExprReturn):
+            expr.expr = self._constant_fold(expr.expr, False)
+
+        elif isinstance(expr, ExprBinary):
+            # TODO: support for multiple expressions in the binary expressions, that will allow
+            #       for better constant folding
+
+            expr.left = self._constant_fold(expr.left, False)
+            expr.right = self._constant_fold(expr.right, False)
+
+            if expr.op == '&&':
+                # We know both
+                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
+                    return 1 if expr.left.value != 0 and expr.right.value != 0 else 0
+
+                # If we first have 0 we can just return 0
+                if isinstance(expr.left, ExprNumber) and expr.left.value == 0:
+                    return ExprNumber(0)
+
+                # if the second is a 0 we can just replace this with a comma operator
+                if isinstance(expr.right, ExprNumber) and expr.left.value == 0:
+                    return ExprComma().add(expr.left).add(ExprNumber(0))
+
+            elif expr.op == '||':
+                # We know both
+                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
+                    return 1 if expr.left.value != 0 or expr.right.value != 0 else 0
+
+                # If the first is a 0, then we can just run the second
+                if isinstance(expr.left, ExprNumber) and expr.left.value == 0:
+                    return expr.right
+
+                # If we know the second is a 0 just run the first
+                if isinstance(expr.right, ExprNumber) and expr.right.value == 0:
+                    return expr.left
+
+            else:
+                # The numbers are know and we can calculate them
+                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
+                    return ExprNumber(eval(f'{expr.left} {expr.op} {expr.right}'))
+
+        elif isinstance(expr, ExprDeref):
+            expr.expr = self._constant_fold(expr.expr, False)
+            # deref an addrof
+            if isinstance(expr.expr, ExprAddrof):
+                return expr.expr.expr
+
+        elif isinstance(expr, ExprCopy):
+            expr.source = self._constant_fold(expr.source, False)
+            expr.destination = self._constant_fold(expr.destination, False)
+            # assignment equals to itself and has no side effects
+            if expr.source == expr.destination and expr.source.is_pure(self):
+                return expr.destination
+
+        elif isinstance(expr, ExprLoop):
+            expr.cond = self._constant_fold(expr.cond, False)
+            expr.body = self._constant_fold(expr.body, True)
+
+            # The loop has a constant 0
+            if isinstance(expr.cond, ExprNumber) and expr.cond.value == 0:
+                return ExprNop()
+
+        return expr
+
+    def _do_constant_folding(self):
+        last = str(self)
+
+        self._find_pure_functions()
+        for f in self.func_list:
+            f.code = self._constant_fold(f.code, True)
+
+        while str(self) != last:
+            last = str(self)
+            self._find_pure_functions()
+            for f in self.func_list:
+                f.code = self._constant_fold(f.code, True)
+
+    ####################################################################################################################
+    # Helpers
+    ####################################################################################################################
+
+    def __str__(self):
+        s = []
+        for f in self.func_list:
+            s.append(str(f))
+        return '\n'.join(s)
+
+    def _define(self, name: str, ident: Identifier) -> Expr:
+        if self._use(name) is not None:
+            return None
+        self._scopes[-1][name] = ident
+        return ExprIdent(ident)
+
+    def _def_var(self, name) -> Expr:
+        ret = self._define(name, VariableIdentifier(name, self.fun.num_vars))
+        if ret is None:
+            return None
+        self.fun.num_vars += 1
+        return ret
+
+    def _def_param(self, name) -> Expr:
+        ret = self._define(name, ParameterIdentifier(name, self.fun.num_params))
+        if ret is None:
+            return None
+        self.fun.num_params += 1
+        return ret
+
+    def _def_fun(self, name) -> Expr:
+        ret = self._define(name, FunctionIdentifier(name, len(self.func_list)))
+        return ret
+
+    def _temp(self) -> Expr:
+        ret = self._def_param(f'$TEMP{self._temp_counter}')
+        self._temp_counter += 1
+        return ret
+
+    def _use(self, name: str) -> Expr:
+        for scope in reversed(self._scopes):
+            if name in scope:
+                return ExprIdent(scope[name])
+        return None
+
+    def _add_function(self, name: str):
+        self.fun = Function(name)
+        self.func_list.append(self.fun)
+
+    def _push_scope(self):
+        self._scopes.append({})
+
+    def _pop_scope(self):
+        self._scopes.pop()
+
+    def _combine_pos(self, pos1: CodePosition, pos2: CodePosition):
+        if pos2 is None:
+            return pos1
+        return CodePosition(pos1.start_line, pos2.end_line, pos1.start_column, pos2.end_column)
+
+    ####################################################################################################################
+    # Error reporting
+    ####################################################################################################################
 
     def report_error(self, msg: str):
         pos = self.token.pos
@@ -42,70 +311,27 @@ class Parser(Tokenizer):
         print()
         exit(-1)
 
-    def _expand_pos(self, pos1: CodePosition, pos2: CodePosition):
-        return CodePosition(pos1.start_line, pos2.end_line, pos1.start_column, pos2.end_column)
-
-    def _check_binary_op(self, tok, e1: Expr, e2: Expr):
-        t1 = e1.resolve_type(self.current_function)
-        t2 = e2.resolve_type(self.current_function)
-
-        op = tok.value
-        pos = tok.pos
-
-        PTR_AND_INT_MATRIX = {
-            (CInteger, CInteger),
-            (CPointer, CInteger),
-            (CInteger, CPointer)
-        }
-
-        INT_MATRIX = {
-            (CInteger, CInteger)
-        }
-
-        OP = {
-            '+': PTR_AND_INT_MATRIX,
-            '-': PTR_AND_INT_MATRIX,
-            '*': INT_MATRIX,
-            '/': INT_MATRIX,
-            '%': INT_MATRIX,
-            '|': INT_MATRIX,
-            '&': INT_MATRIX,
-            '^': INT_MATRIX,
-            '>>': INT_MATRIX,
-            '<<': INT_MATRIX,
-            '>': PTR_AND_INT_MATRIX,
-            '<': PTR_AND_INT_MATRIX,
-            '>=': PTR_AND_INT_MATRIX,
-            '<=': PTR_AND_INT_MATRIX,
-            '==': PTR_AND_INT_MATRIX,
-            '!=': PTR_AND_INT_MATRIX
-        }
-
-        if op[-1] == '=' and op not in ['<=', '>=', '==', '!=']:
-            op = op[:-1]
-
-        for el in OP[op]:
-            if isinstance(t1, el[0]) and isinstance(t2, el[1]):
-                return
-
-        self.token.pos = pos
-        self.report_error(f'invalid operands to binary {op} (have `{t1}` and `{t2}`)')
+    ####################################################################################################################
+    # Expression parsing
+    ####################################################################################################################
 
     def _parse_literal(self):
         if self.is_token(IntToken):
             val = self.token.value
             pos = self.token.pos
             self.next_token()
-            return ExprIntegerLiteral(pos, val)
+            return ExprNumber(val, pos)
 
         elif self.is_token(IdentToken):
             val = self.token.value
             pos = self.token.pos
             self.next_token()
-            if self.current_function.get_var(val) is None and self.unit.get_symbol(val) is None and self.current_function.name != val:
+            expr = self._use(val)
+            if expr is None:
                 self.token.pos = pos
                 self.report_error(f'`{val}` undeclared')
-            return ExprIdentLiteral(pos, val)
+            expr.pos = pos
+            return expr
 
         elif self.match_token('('):
             expr = self._parse_expr()
@@ -116,51 +342,62 @@ class Parser(Tokenizer):
             self.report_error(f'expected expression before {self.token}')
 
     def _parse_postfix(self):
-        e = self._parse_literal()
+        x = self._parse_literal()
 
-        pos = self.token.pos
-        if self.match_token('++'):
-            if not e.is_lvalue():
-                self.token.pos = pos
-                self.report_error('lvalue required as increment operand')
-            e = ExprPostfix(self._expand_pos(e.pos, pos), '++', e)
+        while True:
 
-        elif self.match_token('--'):
-            if not e.is_lvalue():
-                self.token.pos = pos
-                self.report_error('lvalue required as decrement operand')
-            e = ExprPostfix(self._expand_pos(e.pos, pos), '--', e)
+            pos = self.token.pos
+            if self.is_token('++') or self.is_token('--'):
+                op = self.token.value[0]
+                self.next_token()
 
-        elif self.match_token('['):
-            sub = self._parse_expr()
-            temp_pos = self.token.pos
-            self.expect_token(']')
+                # if not e.is_lvalue():
+                #     self.token.pos = pos
+                #     self.report_error('lvalue required as increment operand')
 
-            arr_type = e.resolve_type(self.current_function)
-            if not isinstance(arr_type, CPointer):
-                self.token.pos = pos
-                self.report_error('subscripted value is neither array nor pointer nor vector')
+                temp = self._temp()
+                if x.is_pure(self):
+                    x = ExprComma(self._combine_pos(x.pos, pos))\
+                        .add(ExprCopy(x, temp))\
+                        .add(ExprCopy(ExprBinary(x, op, ExprNumber(1)), x))\
+                        .add(temp)
+                else:
+                    temp2 = self._temp()
+                    x = ExprComma(self._combine_pos(x.pos, pos))\
+                        .add(ExprCopy(ExprAddrof(x), temp))\
+                        .add(ExprCopy(ExprDeref(temp), temp2))\
+                        .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1)), ExprDeref(temp)))\
+                        .add(temp2)
 
-            if not isinstance(sub.resolve_type(self.current_function), CInteger):
-                self.token.pos = pos
-                self.report_error('array subscript is not an integer')
-
-            return ExprDeref(self._expand_pos(e.pos, temp_pos), ExprBinary(None, e, '+', sub))
-
-        elif self.match_token('('):
-            args = []
-            temp_pos = self.token.pos
-            while not self.match_token(')'):
-                args.append(self._parse_assignment())
-                if not self.is_token(')'):
-                    self.expect_token(',')
+            elif self.match_token('['):
+                sub = self._parse_expr()
                 temp_pos = self.token.pos
+                self.expect_token(']')
+                # arr_type = e.resolve_type(self.current_function)
+                # if not isinstance(arr_type, CPointer):
+                #     self.token.pos = pos
+                #     self.report_error('subscripted value is neither array nor pointer nor vector')
+                #
+                # if not isinstance(sub.resolve_type(self.current_function), CInteger):
+                #     self.token.pos = pos
+                #     self.report_error('array subscript is not an integer')
+                return ExprDeref(ExprBinary(x, '+', sub), self._combine_pos(x.pos, temp_pos))
 
-            # TODO: type checking
+            elif self.match_token('('):
+                args = []
+                temp_pos = self.token.pos
+                while not self.match_token(')'):
+                    args.append(self._parse_assignment())
+                    if not self.is_token(')'):
+                        self.expect_token(',')
+                    temp_pos = self.token.pos
 
-            return ExprCall(self._expand_pos(e.pos, temp_pos), e, args)
+                return ExprCall(x, args, self._combine_pos(x.pos, temp_pos))
 
-        return e
+            else:
+                break
+
+        return x
 
     def _parse_prefix(self):
         pos = self.token.pos
@@ -168,78 +405,81 @@ class Parser(Tokenizer):
         # Address-of
         if self.match_token('&'):
             e = self._parse_prefix()
-            if not e.is_lvalue():
-                self.token.pos = pos
-                self.report_error('lvalue required as unary `&` operand')
-            return ExprAddrOf(self._expand_pos(pos, e.pos), e)
+            # if not e.is_lvalue():
+            #     self.token.pos = pos
+            #     self.report_error('lvalue required as unary `&` operand')
+            return ExprAddrof(e, self._combine_pos(pos, e.pos))
 
         elif self.match_token('*'):
             e = self._parse_prefix()
-            typ = e.resolve_type(self.current_function)
-            pos = self._expand_pos(pos, e.pos)
-
-            if not isinstance(typ, CPointer):
-                self.token.pos = pos
-                self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
-
-            if isinstance(typ.type, CVoid):
-                self.token.pos = pos
-                self.report_error('dereferencing `void *` pointer')
-
-            return ExprDeref(pos, e)
+            # typ = e.resolve_type(self.current_function)
+            # pos = self._expand_pos(pos, e.pos)
+            #
+            # if not isinstance(typ, CPointer):
+            #     self.token.pos = pos
+            #     self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
+            #
+            # if isinstance(typ.type, CVoid):
+            #     self.token.pos = pos
+            #     self.report_error('dereferencing `void *` pointer')
+            #
+            return ExprDeref(e, self._combine_pos(pos, e.pos))
 
         elif self.match_token('~'):
             e = self._parse_prefix()
-            typ = e.resolve_type(self.current_function)
-            pos = self._expand_pos(pos, e.pos)
-            if not isinstance(typ, CInteger):
-                self.token.pos = pos
-                self.report_error(f'invalid type argument of unary `~` (have `{typ}`)')
-            return ExprUnary(pos, '~', e)
+            # typ = e.resolve_type(self.current_function)
+            # pos = self._expand_pos(pos, e.pos)
+            # if not isinstance(typ, CInteger):
+            #     self.token.pos = pos
+            #     self.report_error(f'invalid type argument of unary `~` (have `{typ}`)')
+            return ExprBinary(e, '^', ExprNumber(0xFFFF))
 
         elif self.match_token('!'):
             e = self._parse_prefix()
-            typ = e.resolve_type(self.current_function)
-            pos = self._expand_pos(pos, e.pos)
-            if not isinstance(typ, CInteger):
-                self.token.pos = pos
-                self.report_error(f'invalid type argument of unary `!` (have `{typ}`)')
-            return ExprUnary(pos, '!', e)
+            # typ = e.resolve_type(self.current_function)
+            # pos = self._expand_pos(pos, e.pos)
+            # if not isinstance(typ, CInteger):
+            #     self.token.pos = pos
+            #     self.report_error(f'invalid type argument of unary `!` (have `{typ}`)')
+            return ExprBinary(e, '==', ExprNumber(0), self._combine_pos(pos, e.pos))
 
-        elif self.match_token('++'):
+        elif self.is_token('++') or self.is_token('--'):
+            op = self.token.value[0]
+            self.next_token()
             e = self._parse_prefix()
-            if not e.is_lvalue():
-                self.token.pos = pos
-                self.report_error('lvalue required as decrement operand')
-            return ExprUnary(self._expand_pos(pos, e.pos), '++', e)
 
-        elif self.match_token('--'):
-            e = self._parse_prefix()
-            if not e.is_lvalue():
-                self.token.pos = pos
-                self.report_error('lvalue required as increment operand')
-            return ExprUnary(self._expand_pos(pos, e.pos), '--', e)
+            # if not e.is_lvalue():
+            #     self.token.pos = pos
+            #     self.report_error('lvalue required as decrement operand')
+
+            if e.is_pure(self):
+                return ExprCopy(ExprBinary(e, op, ExprNumber(1)), e)
+            else:
+                temp = self._temp()
+                return ExprComma()\
+                    .add(ExprCopy(ExprAddrof(e), temp))\
+                    .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1)), ExprDeref(temp)))
 
         # Size-of
-        elif self.match_keyword('sizeof'):
-            xtype = self._parse_expr().resolve_type(self.current_function).sizeof()
-            return ExprIntegerLiteral(self._expand_pos(pos, self.token.pos), xtype)
+        # elif self.match_keyword('sizeof'):
+        #     xtype = self._parse_expr().resolve_type(self.current_function).sizeof()
+        #     return ExprNumber(xtype, self._expand_pos(pos, self.token.pos))
 
         # Type cast
-        self.push()
-        if self.match_token('('):
-            typ = self._parse_type(False)
-            if typ is not None:
-                self.discard()
-                self.expect_token(')')
-                expr = self._parse_prefix()
-                # expr_type = expr.resolve_type(self.current_function)
-                # TODO: when we add structs we will need to check for none-scalar type
-                return ExprCast(self._expand_pos(pos, self.token.pos), expr, typ)
-            else:
-                self.pop()
-        else:
-            self.pop()
+        # self.push()
+        # if self.match_token('('):
+        #     typ = self._parse_type(False)
+        #     if typ is not None:
+        #         self.discard()
+        #         self.expect_token(')')
+        #         expr = self._parse_prefix()
+        #         # expr_type = expr.resolve_type(self.current_function)
+        #         # TODO: when we add structs we will need to check for none-scalar type
+        #         return ExprCast(self._expand_pos(pos, self.token.pos), expr, typ)
+        #     else:
+        #         self.pop()
+        # else:
+        #     self.pop()
 
         return self._parse_postfix()
 
@@ -249,8 +489,8 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_prefix()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_additive(self):
@@ -259,8 +499,8 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_multiplicative()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_shift(self):
@@ -269,19 +509,20 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_additive()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_relational(self):
-        e1 = self._parse_shift()
-        while self.is_token('<') or self.is_token('>') or self.is_token('>=') or self.is_token('<='):
-            op = self.token
-            self.next_token()
-            e2 = self._parse_shift()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
-        return e1
+        # e1 = self._parse_shift()
+        # while self.is_token('<') or self.is_token('>') or self.is_token('>=') or self.is_token('<='):
+        #     op = self.token
+        #     self.next_token()
+        #     e2 = self._parse_shift()
+        #     self._check_binary_op(op, e1, e2)
+        #     e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+        # return e1
+        return self._parse_shift()
 
     def _parse_equality(self):
         e1 = self._parse_relational()
@@ -289,8 +530,11 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_relational()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            if op == '==':
+                e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            else:
+                e1 = ExprBinary(ExprBinary(e1, '==', e2), '==', ExprNumber(0))
         return e1
 
     def _parse_bitwise_and(self):
@@ -299,8 +543,8 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_equality()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_xor(self):
@@ -309,8 +553,8 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_equality()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_or(self):
@@ -319,69 +563,114 @@ class Parser(Tokenizer):
             op = self.token
             self.next_token()
             e2 = self._parse_equality()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_logical_and(self):
-        return self._parse_bitwise_or()
+        e1 = self._parse_bitwise_or()
+        while self.is_token('&&'):
+            op = self.token
+            self.next_token()
+            e2 = self._parse_bitwise_or()
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+        return e1
 
     def _parse_logical_or(self):
-        return self._parse_logical_and()
+        e1 = self._parse_logical_and()
+        while self.is_token('||'):
+            op = self.token
+            self.next_token()
+            e2 = self._parse_logical_and()
+            # self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+        return e1
 
     def _parse_conditional(self):
-        return self._parse_logical_or()
+        x = self._parse_logical_or()
+
+        if self.match_token('?'):
+            y = self._parse_conditional()
+            self.expect_token(':')
+            z = self._parse_conditional()
+
+            temp = self._temp()
+            x = ExprComma(self._combine_pos(x.pos, z.pos))\
+                .add(ExprBinary(ExprBinary(x, '&&', ExprComma().add(ExprCopy(y, temp)).add(ExprNumber(1))), '||', ExprCopy(z, temp)))\
+                .add(temp)
+
+        return x
 
     def _parse_assignment(self):
-        e1 = self._parse_conditional()
+        x = self._parse_conditional()
 
         if self.is_token('=') or self.is_token('+=') or self.is_token('-=') or self.is_token('*=') or \
                 self.is_token('/=') or self.is_token('%=') or self.is_token('>>=') or self.is_token('<<=') or \
                 self.is_token('&=') or self.is_token('^=') or self.is_token('|='):
             op = self.token
 
-            t1 = e1.resolve_type(self.current_function)
-            if not e1.is_lvalue() or isinstance(t1, FunctionDeclaration):
-                self.report_error('lvalue required as left operand of assignment')
+            # t1 = e1.resolve_type(self.current_function)
+            # if not e1.is_lvalue() or isinstance(t1, FunctionDeclaration):
+            #     self.report_error('lvalue required as left operand of assignment')
 
             self.next_token()
-            e2 = self._parse_assignment()
+            y = self._parse_assignment()
 
-            # if has an operational assignment, then turn into the operation
-            if op.value != '=':
-                self._check_binary_op(op, e1, e2)
-                e2 = ExprBinary(op.pos, e1, op.value[:-1], e2)
+            if op.value == '=':
+                x = ExprCopy(y, x, self._combine_pos(x.pos, y.pos))
+            else:
+                op = op[:-1]
+                if x.is_pure(self):
+                    return ExprCopy(ExprBinary(x, op, y), x, self._combine_pos(x.pos, y.pos))
+                else:
+                    temp = self._temp()
+                    return ExprComma(self._combine_pos(x.pos, y.pos)).add(ExprCopy(ExprAddrof(x), temp)).add(ExprCopy(ExprBinary(ExprDeref(temp), op, y), ExprDeref(temp)))
 
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, '=', e2)
-
-        return e1
+        return x
 
     def _parse_comma(self):
         e1 = self._parse_assignment()
+
+        # Turn into a comma if has stuff
+        if self.is_token(','):
+            e1 = ExprComma().add(e1)
+
         while self.match_token(','):
-            e2 = self._parse_expr()
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, ',', e2)
+            e1.add(self._parse_comma())
+
         return e1
 
     def _parse_expr(self):
         return self._parse_comma()
 
+    ####################################################################################################################
+    # Statement parsing
+    ####################################################################################################################
+
     def _parse_stmt_block(self):
-        block = StmtBlock()
+        block = ExprComma()
         while not self.match_token('}'):
-            block.append(self._parse_stmt())
+            block.add(self._parse_stmt())
         return block
 
     def _parse_stmt(self):
+        pos = self.token.pos
+
         if self.match_keyword('if'):
             self.expect_token('(')
-            cond = self._parse_expr()
+            x = self._parse_expr()
             self.expect_token(')')
-            true_stmt = self._parse_stmt()
-            false_stmt = None
+            y = self._parse_stmt()
+
             if self.match_keyword('else'):
-                false_stmt = self._parse_stmt()
-            return StmtIf(cond, true_stmt, false_stmt)
+                z = self._parse_stmt()
+                temp = self._temp()
+                return ExprComma(self._combine_pos(x.pos, z.pos))\
+                    .add(ExprBinary(ExprBinary(x, '&&', ExprComma().add(ExprCopy(y, temp)).add(ExprNumber(1))), '||', ExprCopy(z, temp)))\
+                    .add(temp)
+            else:
+                return ExprBinary(x, "&&", y)
 
         elif self.match_keyword('for'):
             assert False
@@ -390,31 +679,41 @@ class Parser(Tokenizer):
             self.expect_token('(')
             cond = self._parse_expr()
             self.expect_token(')')
-            stmt = self._parse_stmt()
-            return StmtWhile(cond, stmt)
+            body = self._parse_stmt()
+            return ExprLoop(cond, body, self._combine_pos(pos, body.pos))
 
         elif self.match_keyword('do'):
-            assert False
+            body = self._parse_stmt()
+            self.expect_keyword('while')
+            self.expect_token('(')
+            cond = self._parse_expr()
+            temp_pos = self.token.pos
+            self.expect_token(')')
+            return ExprComma(self._combine_pos(pos, temp_pos)).add(body).add(ExprLoop(cond, body))
 
         elif self.match_keyword('switch'):
             assert False
 
         elif self.match_keyword('return'):
-            stmt = StmtReturn()
+            stmt = ExprReturn(ExprNop())
             if not self.is_token(';'):
                 stmt.expr = self._parse_expr()
+            temp_pos = self.token.pos
             self.expect_token(';')
+            stmt.pos = self._combine_pos(pos, temp_pos)
             return stmt
 
         elif self.match_token('{'):
             return self._parse_stmt_block()
 
         elif self.match_token(';'):
-            return None
+            return ExprNop()
 
         else:
-            stmt = StmtExpr(self._parse_expr())
+            stmt = self._parse_expr()
+            temp_pos = self.token.pos
             self.expect_token(';')
+            stmt.pos = self._combine_pos(stmt.pos, temp_pos)
             return stmt
 
     def _parse_type(self, raise_error):
@@ -469,24 +768,16 @@ class Parser(Tokenizer):
 
         return typ
 
-    def _parse_func(self, conv: CallingConv, is_static: bool, name: str, ret_type: CType):
-        func = FunctionDeclaration()
-        func.unit = self.unit
-        func.name = name
-        func.ret_type = ret_type
-        func.calling_convention = conv
-        func.static = is_static
-        self.current_function = func
-
+    def _parse_func(self):
         # Get the params
         self.expect_token('(')
 
         def parse_arg():
             typ = self._parse_type(True)
-            name = None
-            if not self.is_token(','):
-                name, pos = self.expect_ident()
-            func.add_arg(name, typ)
+            name, pos = self.expect_ident()
+            if self._def_param(name) is None:
+                self.token.pos = pos
+                self.report_error(f'redefinition of `{name}`')
 
         if not self.match_token(')'):
             parse_arg()
@@ -494,52 +785,49 @@ class Parser(Tokenizer):
                 parse_arg()
             self.expect_token(')')
 
-        if self.is_token(';'):
-            # Just a function prototype
-            pass
+        # Parse the body
+        self.expect_token('{')
 
-        else:
-            # Parse the body
-            self.expect_token('{')
+        # Parse all the variable declarations
+        self.push()
+        typ = self._parse_type(False)
+        while typ is not None:
+            self.discard()
 
-            # Parse all the variable declarations
+            # Helpers to parse a single decl
+            def parse_var_decl():
+                name, pos = self.expect_ident()
+                expr = None
+                if self.match_token('='):
+                    expr = self._parse_assignment()
+
+                if self._def_var(name) is None:
+                    self.token.pos = pos
+                    self.report_error(f'redefinition of `{name}`')
+                self.fun.code.add(expr)
+
+            # Parse all the decls
+            parse_var_decl()
+            while not self.match_token(';'):
+                self.expect_token(',')
+                parse_var_decl()
+
+            # Next
             self.push()
             typ = self._parse_type(False)
-            while typ is not None:
-                self.discard()
+        self.pop()
 
-                # Helpers to parse a single decl
-                def parse_var_decl():
-                    name, pos = self.expect_ident()
-                    expr = None
-                    if self.match_token('='):
-                        expr = self._parse_assignment()
+        # Continue and parse the block
+        self._push_scope()
+        self.fun.code = ExprComma()
+        self.fun.code.add(self._parse_stmt_block())
+        self._pop_scope()
 
-                    if func.get_var(name) is not None:
-                        self.token.pos = pos
-                        self.report_error(f'redefinition of `{name}`')
-                    else:
-                        func.add_var(name, typ, expr)
-
-                # Parse all the decls
-                parse_var_decl()
-                while not self.match_token(';'):
-                    self.expect_token(',')
-                    parse_var_decl()
-
-                # Next
-                self.push()
-                typ = self._parse_type(False)
-            self.pop()
-
-            # Continue and parse the block
-            func.stmts = self._parse_stmt_block()
-
-        return func
+        # Add an implicit `return 0;`
+        self.fun.code.add(ExprReturn(ExprNumber(0)))
 
     def parse(self):
-        self.unit = CompilationUnit()
-
+        self._push_scope()
         while not self.is_token(EofToken):
 
             # Typedef
@@ -565,28 +853,28 @@ class Parser(Tokenizer):
             # Either a global or
             else:
                 # Reset the state
-                is_static = False
-                conv = CallingConv.STACK_CALL
-
-                # Handle modifiers for global variables and functions
-                while True:
-                    # Static modifier
-                    if self.is_keyword('static'):
-                        if is_static:
-                            self.report_error('duplicate `static`')
-
-                        self.next_token()
-                        is_static = True
-
-                    elif self.match_keyword('__regcall'):
-                        conv = CallingConv.REGISTER_CALL
-
-                    elif self.match_keyword('__stackcall'):
-                        conv = CallingConv.STACK_CALL
-
-                    # No more modifiers
-                    else:
-                        break
+                # is_static = False
+                # conv = CallingConv.STACK_CALL
+                #
+                # # Handle modifiers for global variables and functions
+                # while True:
+                #     # Static modifier
+                #     if self.is_keyword('static'):
+                #         if is_static:
+                #             self.report_error('duplicate `static`')
+                #
+                #         self.next_token()
+                #         is_static = True
+                #
+                #     elif self.match_keyword('__regcall'):
+                #         conv = CallingConv.REGISTER_CALL
+                #
+                #     elif self.match_keyword('__stackcall'):
+                #         conv = CallingConv.STACK_CALL
+                #
+                #     # No more modifiers
+                #     else:
+                #         break
 
                 typ = self._parse_type(True)
 
@@ -596,60 +884,39 @@ class Parser(Tokenizer):
 
                 # Check if a function
                 if self.is_token('('):
-                    func = self._parse_func(conv, is_static, name, typ)
-
-                    # Defined Function
-                    if func.stmts is not None:
-                        # Check not declared already with body
-                        orig_func = self.unit.get_symbol(name)
-                        if orig_func is not None:
-                            # Prev is a full function
-                            if orig_func.stmts is not None:
-                                self.token.pos = name_pos
-                                self.report_error(f'redefinition of `{name}`')
-
-                            # prev is a prototype
-                            else:
-                                # TODO: make sure not different
-                                self.unit.remove_symbol(name)
-
-                        self.unit.add_symbol(func)
-
-                    # Defined Prototype
-                    else:
-                        # only add if not defined already
-                        if self.unit.get_symbol(name) is None:
-                            self.unit.add_symbol(func)
-                        else:
-                            # TODO: make sure not different
-                            pass
+                    self._def_fun(name)
+                    self._add_function(name)
+                    self._parse_func()
 
                 # Assume global variable instead
                 else:
-                    def parse_decl():
-                        expr = None
+                    # def parse_decl():
+                    #     expr = None
+                    #
+                    #     # Check the name
+                    #     if self.unit.get_symbol(name) is not None:
+                    #         self.token.pos = name_pos
+                    #         self.report_error(f'redefinition of `{name}`')
+                    #
+                    #     # parse expression if any
+                    #     if self.match_token('='):
+                    #         expr = self._parse_expr()
+                    #         if not expr.is_pure():
+                    #             self.token.pos = expr.pos
+                    #             self.report_error('initializer element is not constant')
+                    #
+                    #     # add the symbol
+                    #     self.unit.add_symbol(VariableDeclaration(name, typ, expr))
+                    #
+                    # # parse all decls
+                    # parse_decl()
+                    # while self.match_token(','):
+                    #     name, name_pos = self.expect_ident()
+                    #     parse_decl()
+                    #
+                    # self.expect_token(';')
+                    pass
 
-                        # Check the name
-                        if self.unit.get_symbol(name) is not None:
-                            self.token.pos = name_pos
-                            self.report_error(f'redefinition of `{name}`')
+        self._pop_scope()
 
-                        # parse expression if any
-                        if self.match_token('='):
-                            expr = self._parse_expr()
-                            if not expr.is_pure():
-                                self.token.pos = expr.pos
-                                self.report_error('initializer element is not constant')
-
-                        # add the symbol
-                        self.unit.add_symbol(VariableDeclaration(name, typ, expr))
-
-                    # parse all decls
-                    parse_decl()
-                    while self.match_token(','):
-                        name, name_pos = self.expect_ident()
-                        parse_decl()
-
-                    self.expect_token(';')
-
-        return self.unit
+        return self
