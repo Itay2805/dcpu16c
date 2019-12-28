@@ -122,6 +122,22 @@ class Parser(Tokenizer):
                 self.report_error('lvalue required as decrement operand')
             e = ExprPostfix(self._expand_pos(e.pos, pos), '--', e)
 
+        elif self.match_token('['):
+            sub = self._parse_expr()
+            temp_pos = self.token.pos
+            self.expect_token(']')
+
+            arr_type = e.resolve_type(self.current_function)
+            if not isinstance(arr_type, CPointer):
+                self.token.pos = pos
+                self.report_error('subscripted value is neither array nor pointer nor vector')
+
+            if not isinstance(sub.resolve_type(self.current_function), CInteger):
+                self.token.pos = pos
+                self.report_error('array subscript is not an integer')
+
+            return ExprDeref(self._expand_pos(e.pos, temp_pos), ExprBinary(None, e, '+', sub))
+
         return e
 
     def _parse_prefix(self):

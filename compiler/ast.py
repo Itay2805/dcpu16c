@@ -141,7 +141,7 @@ class ExprDeref(Expr):
         if ret is None:
             temp = asm.allocate_temp()
             self.expr.compile(asm, temp)
-            return temp
+            return '[' + temp + ']'
         else:
             return ret
 
