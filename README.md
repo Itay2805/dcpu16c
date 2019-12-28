@@ -7,7 +7,9 @@ some simple OS for the DCPU16, and because I like C and I can't find anything
 that I can port easily I will just create my own :shrug:
 
 ## Working
-* Functions
+* Functions and function calls
+    * support for stack call
+    * support for register call (code gen for regcall functions is pretty shitty at the moment)     
 * Variables (must be declared at start of function)
 * All binary and unary operators
     * pointer arith is kinda broken on types which are not 16bit
@@ -19,7 +21,6 @@ that I can port easily I will just create my own :shrug:
 * casts
 
 ## TODO
-* Function calls
 * Structs, Enums and Unions
 * Global variables
 * Multiple compilation units
