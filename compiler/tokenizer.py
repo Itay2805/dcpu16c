@@ -259,6 +259,15 @@ class Tokenizer:
             if len(self.stream) == 0:
                 self.token = EofToken()
 
+            elif self.stream[0] == '\'':
+                self._inc_stream()
+                ch = self.stream[0]
+                self._inc_stream()
+                if self.stream[0] != '\'':
+                    self._syntax_error(f'expected `\'`, got `{self.stream[0]}`')
+                self._inc_stream()
+                self.token = IntToken(pos, ord(ch))
+
             # Integers
             elif self.stream[0].isdigit():
                 # Figure the base

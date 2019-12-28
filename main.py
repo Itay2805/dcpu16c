@@ -3,12 +3,8 @@ from compiler.parser import Parser
 
 if __name__ == '__main__':
     parser = Parser("""
-__regcall int add(int a, int b) {
-    return a + b;
-}
-
-int main() {
-   return add(1, 2); 
+void main() {
+    *(int*)(0x8000) = (0xf << 8) | (0x0 << 12) | ('A'); 
 }
 """)
     print(parser.parse().compile())
