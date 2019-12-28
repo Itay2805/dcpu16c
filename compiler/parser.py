@@ -177,9 +177,15 @@ class Parser(Tokenizer):
             e = self._parse_prefix()
             typ = e.resolve_type(self.current_function)
             pos = self._expand_pos(pos, e.pos)
+
             if not isinstance(typ, CPointer):
                 self.token.pos = pos
                 self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
+
+            if isinstance(typ.type, CVoid):
+                self.token.pos = pos
+                self.report_error('dereferencing `void *` pointer')
+
             return ExprDeref(pos, e)
 
         elif self.match_token('~'):
@@ -334,7 +340,8 @@ class Parser(Tokenizer):
                 self.is_token('&=') or self.is_token('^=') or self.is_token('|='):
             op = self.token
 
-            if not e1.is_lvalue():
+            t1 = e1.resolve_type(self.current_function)
+            if not e1.is_lvalue() or isinstance(t1, FunctionDeclaration):
                 self.report_error('lvalue required as left operand of assignment')
 
             self.next_token()

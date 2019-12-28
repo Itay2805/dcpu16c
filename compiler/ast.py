@@ -58,11 +58,7 @@ class ExprIdentLiteral(Expr):
         if var is not None:
             return var.storage
         else:
-            var = asm.current_function.unit.get_symbol(self.name)
-            if var is not None:
-                return var.storage
-            else:
-                assert False
+            assert False
 
     def resolve_type(self, func):
         var = func.get_var(self.name)
@@ -84,7 +80,12 @@ class ExprIdentLiteral(Expr):
         if var is not None:
             asm.load(operand, var.storage)
         else:
-            assert False
+            typ = asm.current_function.unit.get_symbol(self.name)
+            assert typ is not None
+            if isinstance(typ, FunctionDeclaration):
+                asm.load(operand, typ.name)
+            else:
+                assert False
 
 
 class ExprAddrOf(Expr):
