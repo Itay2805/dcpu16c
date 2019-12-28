@@ -5,14 +5,14 @@ if __name__ == '__main__':
     parser = Parser("""
 void another_function();
 
-int main() {
+void main() {
     int a = 10;
-    int count = 0;
-    while(a) {
-        a -= 1;
-        count += 1;
+    int b = 0;
+    while(a != b) {
+        b++;
     }
-    return count;
+    
+    while(1);
 }
 """)
     print(parser.parse().compile())

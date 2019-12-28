@@ -113,6 +113,73 @@ class ExprDeref(Expr):
         asm.load(operand, f'[{operand}]')
 
 
+class ExprUnary(Expr):
+
+    def __init__(self, pos, op: str, expr: Expr):
+        self.pos = pos
+        self.op = op
+        self.expr = expr
+
+    def resolve_type(self, func):
+        return self.expr.resolve_type(func)
+
+    def is_pure(self):
+        if self.op in ['--', '++']:
+            return False
+        return self.expr.is_pure()
+
+    def eval(self):
+        return eval(f'{self.op}{self.expr.eval()}')
+
+    def compile(self, asm: Assembler, operand):
+        if self.expr.is_pure():
+            asm.load(operand, self.eval())
+        else:
+            if self.op == '~':
+                self.expr.compile(asm, operand)
+                asm.append(f'XOR {operand}, 0xFFFF')
+
+            elif self.op == '!':
+                temp = asm.allocate_temp()
+                self.expr.compile(asm, temp)
+                asm.append(f'SET {operand}, 0')
+                asm.append(f'IFE {temp}, 0')
+                asm.append(f'SET {operand}, 1')
+                asm.free_temp(temp)
+
+            elif self.op == '--':
+                asm.append(f'SUB {self.expr.addrof(asm)}, 1')
+                asm.load(operand, self.expr.addrof(asm))
+
+            elif self.op == '++':
+                asm.append(f'ADD {self.expr.addrof(asm)}, 1')
+                asm.load(operand, self.expr.addrof(asm))
+
+
+class ExprPostfix(Expr):
+
+    def __init__(self, pos, op: str, expr: Expr):
+        self.pos = pos
+        self.op = op
+        self.expr = expr
+
+    def resolve_type(self, func):
+        return self.expr.resolve_type(func)
+
+    def compile(self, asm: Assembler, operand):
+        if self.expr.is_pure():
+            asm.load(operand, self.eval())
+        else:
+            if self.op == '--':
+                asm.load(operand, self.expr.addrof(asm))
+                asm.append(f'SUB {self.expr.addrof(asm)}, 1')
+
+            elif self.op == '++':
+                asm.load(operand, self.expr.addrof(asm))
+                asm.append(f'ADD {self.expr.addrof(asm)}, 1')
+
+
+
 class ExprBinary(Expr):
 
     OPS_UNSIGNED = {
@@ -125,7 +192,12 @@ class ExprBinary(Expr):
         '|': 'BOR',
         '^': 'XOR',
         '>>': 'SHR',
-        '<<': 'SHL'
+        '<<': 'SHL',
+
+        '>': 'IFG',
+        '<': 'IFL',
+        '==': 'IFE',
+        '!=': 'IFN'
     }
 
     OPS_SIGNED = {
@@ -138,7 +210,12 @@ class ExprBinary(Expr):
         '|': 'BOR',
         '^': 'XOR',
         '>>': 'ASR',
-        '<<': 'SHL'
+        '<<': 'SHL',
+
+        '>': 'IFA',
+        '<': 'IFB',
+        '==': 'IFE',
+        '!=': 'IFN'
     }
 
     def __init__(self, pos, left: Expr, op: str, right: Expr):
@@ -159,6 +236,8 @@ class ExprBinary(Expr):
 
         if self.op == ',':
             return valb
+        elif self.op in ['<', '>', '<=', '>=', '!=', '==']:
+            return eval(f'1 if {vala} {self.op} {valb} else 0')
         else:
             return eval(f'{vala} {self.op} {valb}')
 
@@ -176,6 +255,13 @@ class ExprBinary(Expr):
                 return left_type
 
     def compile(self, asm: Assembler, operand):
+        # Select the correct instructions
+        typ = self.resolve_type(asm.current_function)
+        ops = ExprBinary.OPS_UNSIGNED
+        if isinstance(typ, CInteger) and typ.signed:
+            ops = ExprBinary.OPS_SIGNED
+
+        # Comma operator
         if self.op == ',':
             if not self.is_pure():
                 self.left.compile(asm, operand)
@@ -185,6 +271,45 @@ class ExprBinary(Expr):
             else:
                 self.right.compile(asm, operand)
 
+        # relational
+        elif self.op in ['<', '>', '==', '!=', '<=', '>=']:
+            # TODO: support signed operands
+            # TODO: can probably optimize more by not allocating an
+            #       operand if our operand is none
+
+            # Eval both sides
+            if self.left.is_pure():
+                left_res = self.left.eval()
+            else:
+                left_res = asm.allocate_temp()
+                self.left.compile(asm, left_res)
+
+            if self.right.is_pure():
+                right_res = self.right.eval()
+            else:
+                right_res = asm.allocate_temp()
+                self.right.compile(asm, right_res)
+
+            op = self.op
+            if self.op in ['<=', '>=']:
+                op = op[:-1]
+
+            if operand is not None:
+                asm.load(operand, '0')
+                asm.append(f'{ops[op]} {left_res}, {right_res}')
+                asm.load(operand, '1')
+                if self.op in ['<=', '>=']:
+                    asm.append(f'{ops["=="]} {left_res}, {right_res}')
+                    asm.load(operand, '1')
+
+            if not self.left.is_pure():
+                asm.free_temp(left_res)
+
+            if not self.right.is_pure():
+                asm.free_temp(right_res)
+
+        # assignment
+        # TODO: maybe turn into left = left op right instead
         elif self.op[-1] == '=':
             assert self.left.is_lvalue()
 
@@ -196,24 +321,24 @@ class ExprBinary(Expr):
 
             # If the op is an assignment and something else then eval it
             if len(self.op[:-1]) != 0:
-                asm.append(f'{ExprBinary.OPS_UNSIGNED[self.op[:-1]]} {operand}, {self.left.addrof(asm)}')
+                asm.append(f'{ops[self.op[:-1]]} {operand}, {self.left.addrof(asm)}')
 
             # Store it
             asm.load(self.left.addrof(asm), operand)
 
+        # normal math
         else:
-            # TODO: support signed operations
             if self.left.is_pure():
                 asm.load(operand, self.left.eval())
             else:
                 self.left.compile(asm, operand)
 
             if self.right.is_pure():
-                asm.append(f'{ExprBinary.OPS_UNSIGNED[self.op]} {operand}, {self.right.eval()}')
+                asm.append(f'{ops[self.op]} {operand}, {self.right.eval()}')
             else:
                 temp = asm.allocate_temp()
                 self.right.compile(asm, temp)
-                asm.append(f'{ExprBinary.OPS_UNSIGNED[self.op]} {operand}, {temp}')
+                asm.append(f'{ops[self.op]} {operand}, {temp}')
                 asm.free_temp(temp)
 
 
@@ -283,13 +408,13 @@ class StmtIf(Stmt):
             self.cond.compile(asm, temp)
             asm.free_temp(temp)
             asm.append(f'IFE {temp}, {0}')
-            asm.append(f'SET PC, {else_label}')
+            asm.goto(else_label)
 
             self.true_stmt.compile(asm)
 
             if self.false_stmt is not None:
                 end_label = asm.temp_label()
-                asm.append(f'SET PC, {end_label}')
+                asm.goto(end_label)
 
                 asm.label(else_label)
                 self.false_stmt.compile(asm)
@@ -312,8 +437,9 @@ class StmtWhile(Stmt):
             if self.cond.eval() != 0:
                 start = asm.temp_label()
                 asm.label(start)
-                self.stmt.compile(asm)
-                asm.append(f'SET PC, {start}')
+                if self.stmt is not None:
+                    self.stmt.compile(asm)
+                asm.goto(start)
 
         else:
             end = asm.temp_label()
@@ -323,10 +449,11 @@ class StmtWhile(Stmt):
             temp = asm.allocate_temp()
             self.cond.compile(asm, temp)
             asm.append(f'IFE {temp}, 0')
-            asm.append(f'SET PC, {end}')
+            asm.goto(end)
             asm.free_temp(temp)
-            self.stmt.compile(asm)
-            asm.append(f'SET PC, {check}')
+            if self.stmt is not None:
+                self.stmt.compile(asm)
+            asm.goto(check)
             asm.label(end)
 
 
@@ -354,9 +481,7 @@ class StmtExpr(Stmt):
 
     def compile(self, asm):
         if not self.expr.is_pure():
-            temp = asm.allocate_temp()
-            self.expr.compile(asm, temp)
-            asm.free_temp(temp)
+            self.expr.compile(asm, None)
 
 
 class VariableDeclaration:

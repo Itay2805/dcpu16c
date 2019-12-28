@@ -9,7 +9,7 @@ that I can port easily I will just create my own :shrug:
 ## Working
 * Functions
 * Variables (must be declared at start of function)
-* Most binary operators 
+* All binary and unary operators
 * Basic type checking
 * if and else
 * return
@@ -20,5 +20,4 @@ that I can port easily I will just create my own :shrug:
 * Function calls
 * Structs, Enums and Unions
 * Global variables
-* Logical, Relational and Equality operators
 * Multiple compilation units

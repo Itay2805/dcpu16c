@@ -31,11 +31,12 @@ class StackAddress:
 
 class Assembler:
 
-    def __init__(self, syntax: AssemblerSyntax):
+    def __init__(self, syntax: AssemblerSyntax, debug=False):
         self.syntax = syntax
         self.code = []
 
         self.lid = 0
+        self._debug = debug
 
         self.stack_size = 0
         self.free_regs = []
@@ -59,7 +60,15 @@ class Assembler:
         assert False
 
     def load(self, op1, op2):
-        self.append(f'SET {op1}, {op2}')
+        if op1 is not None:
+            self.append(f'SET {op1}, {op2}')
+
+    def goto(self, label):
+        self.append(f'SET PC, {label}')
+
+    def debug(self, msg):
+        if self._debug:
+            self.append(f'# {msg}')
 
     def enter_function(self, func):
         self.current_function = func

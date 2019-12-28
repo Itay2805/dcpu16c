@@ -66,10 +66,16 @@ class Parser(Tokenizer):
             '&': INT_MATRIX,
             '^': INT_MATRIX,
             '>>': INT_MATRIX,
-            '<<': INT_MATRIX
+            '<<': INT_MATRIX,
+            '>': PTR_AND_INT_MATRIX,
+            '<': PTR_AND_INT_MATRIX,
+            '>=': PTR_AND_INT_MATRIX,
+            '<=': PTR_AND_INT_MATRIX,
+            '==': PTR_AND_INT_MATRIX,
+            '!=': PTR_AND_INT_MATRIX
         }
 
-        if op[-1] == '=':
+        if op[-1] == '=' and op not in ['<=', '>=', '==', '!=']:
             op = op[:-1]
 
         for el in OP[op]:
@@ -100,28 +106,77 @@ class Parser(Tokenizer):
         else:
             self.report_error(f'expected expression before {self.token}')
 
+    def _parse_postfix(self):
+        expr = self._parse_literal()
+
+        pos = self.token.pos
+        if self.match_token('++'):
+            if not expr.is_lvalue():
+                self.token.pos = pos
+                self.report_error('lvalue required as increment operand')
+            expr = ExprPostfix(self._expand_pos(pos, self.token.pos), '++', expr)
+
+        elif self.match_token('--'):
+            if not expr.is_lvalue():
+                self.token.pos = pos
+                self.report_error('lvalue required as decrement operand')
+            expr = ExprPostfix(self._expand_pos(pos, self.token.pos), '--', expr)
+
+        return expr
+
     def _parse_prefix(self):
         pos = self.token.pos
 
         # Address-of
-        if self.is_token('&'):
-            pos = self.token.pos
-            self.next_token()
+        if self.match_token('&'):
             e = self._parse_prefix()
             if not e.is_lvalue():
                 self.token.pos = pos
                 self.report_error('lvalue required as unary `&` operand')
-            return ExprAddrOf(self._expand_pos(pos, e.pos), e)
+            return ExprAddrOf(self._expand_pos(pos, self.token.pos), e)
 
-        if self.is_token('*'):
-            pos = self.token.pos
-            self.next_token()
+        elif self.match_token('*'):
             e = self._parse_prefix()
             typ = e.resolve_type(self.current_function)
             if not isinstance(typ, CPointer):
                 self.token.pos = pos
                 self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
-            return ExprDeref(self._expand_pos(pos, e.pos), e)
+            return ExprDeref(self._expand_pos(pos, self.token.pos), e)
+
+        elif self.match_token('~'):
+            e = self._parse_prefix()
+            typ = e.resolve_type(self.current_function)
+            if not isinstance(typ, CInteger):
+                self.token.pos = pos
+                self.report_error(f'invalid type argument of unary `~` (have `{typ}`)')
+            return ExprUnary(self._expand_pos(pos, self.token.pos), '~', e)
+
+        elif self.match_token('!'):
+            e = self._parse_prefix()
+            typ = e.resolve_type(self.current_function)
+            if not isinstance(typ, CInteger):
+                self.token.pos = pos
+                self.report_error(f'invalid type argument of unary `!` (have `{typ}`)')
+            return ExprUnary(self._expand_pos(pos, self.token.pos), '!', e)
+
+        elif self.match_token('++'):
+            e = self._parse_prefix()
+            if not e.is_lvalue():
+                self.token.pos = pos
+                self.report_error('lvalue required as decrement operand')
+            return ExprUnary(self._expand_pos(pos, self.token.pos), '++', e)
+
+        elif self.match_token('--'):
+            e = self._parse_prefix()
+            if not e.is_lvalue():
+                self.token.pos = pos
+                self.report_error('lvalue required as increment operand')
+            return ExprUnary(self._expand_pos(pos, self.token.pos), '--', e)
+
+        # Size-of
+        elif self.match_keyword('sizeof'):
+            xtype = self._parse_expr().resolve_type(self.current_function).sizeof()
+            return ExprIntegerLiteral(self._expand_pos(pos, self.token.pos), xtype)
 
         # Type cast
         self.push()
@@ -139,12 +194,7 @@ class Parser(Tokenizer):
         else:
             self.pop()
 
-        # Size-of
-        if self.match_keyword('sizeof'):
-            xtype = self._parse_expr().resolve_type(self.current_function).sizeof()
-            return ExprIntegerLiteral(self._expand_pos(pos, self.token.pos), xtype)
-
-        return self._parse_literal()
+        return self._parse_postfix()
 
     def _parse_multiplicative(self):
         e1 = self._parse_prefix()
@@ -153,7 +203,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_prefix()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_additive(self):
@@ -163,7 +213,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_multiplicative()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_shift(self):
@@ -173,14 +223,28 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_additive()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_relational(self):
-        return self._parse_shift()
+        e1 = self._parse_shift()
+        while self.is_token('<') or self.is_token('>') or self.is_token('>=') or self.is_token('<='):
+            op = self.token
+            self.next_token()
+            e2 = self._parse_shift()
+            self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+        return e1
 
     def _parse_equality(self):
-        return self._parse_relational()
+        e1 = self._parse_relational()
+        while self.is_token('==') or self.is_token('!='):
+            op = self.token
+            self.next_token()
+            e2 = self._parse_relational()
+            self._check_binary_op(op, e1, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+        return e1
 
     def _parse_bitwise_and(self):
         e1 = self._parse_equality()
@@ -189,7 +253,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_equality()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_bitwise_xor(self):
@@ -199,7 +263,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_equality()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_bitwise_or(self):
@@ -209,7 +273,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_equality()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
         return e1
 
     def _parse_logical_and(self):
@@ -235,7 +299,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_assignment()
             self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, op.value, e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
 
         return e1
 
@@ -243,7 +307,7 @@ class Parser(Tokenizer):
         e1 = self._parse_assignment()
         while self.match_token(','):
             e2 = self._parse_expr()
-            e1 = ExprBinary(self._expand_pos(e1.pos, e2.pos), e1, ',', e2)
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, ',', e2)
         return e1
 
     def _parse_expr(self):
