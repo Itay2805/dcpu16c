@@ -6,7 +6,7 @@ class AssemblerSyntax(Enum):
     # Standards Committee Assembly
     SCA = '0xSCA'
     # The most common syntax on the internet
-    NOTCH = 'NOTCH'
+    DASM16 = 'DASM16'
 
 
 class CallingConv(Enum):
@@ -43,26 +43,45 @@ class Assembler:
         # are we compiling with debug output
         self._debug = debug
 
-        # the stack size we used for local variables
-        self.stack_size = 0
         # registers available for temporaries
         self.free_regs = []
+        # registers that we used
+        self.used_regs = []
+        # the function entry point
+        self.function_entry = 0
+        # all the function exit points
+        self.function_exits = []
+        # the amount of stack we used for temp variables
+        self.temp_stack = 0
+
+        # the stack size we used for local variables
+        self.stack_size = 0
         # registers used for temporaries
         self.temp_regs = []
         # the function we are currently compiling for
         self.current_function = None
+        # Registers that must be saved on entry
+        self.calle_saved = []
+        # Registers that must be saved on call
+        self.caller_saved = []
 
     def allocate_temp(self):
         """
         Allocate a temp
         """
         assert len(self.free_regs) != 0
-        return self.free_regs.pop()
+        reg = self.free_regs.pop()
+        if reg in self.calle_saved:
+            self.used_regs.append(reg)
+        return reg
 
     def get_ret(self):
         """
         Get the return value register
         """
+        # TODO: handle if this is not the case
+        assert 'A' in self.free_regs
+        self.free_regs.remove('A')
         return 'A'
 
     def free_temp(self, temp):
@@ -93,6 +112,22 @@ class Assembler:
         if self._debug:
             self.append(f'# {msg}')
 
+    def _fixup_last_function(self):
+        assert self.current_function is not None
+
+        # pop all the regs in the exit points
+        for exit_index in reversed(self.function_exits):
+            for reg in reversed(self.used_regs):
+                self.code.insert(exit_index, f'\tSET {reg}, POP')
+            if self.temp_stack != 0:
+                self.code.insert(exit_index, f'\tSUB SP, {self.temp_stack}')
+
+        # push all the regs in the entry point
+        for reg in self.used_regs:
+            self.code.insert(self.function_entry, f'\tSET PUSH, {reg}')
+
+        self.current_function = None
+
     def enter_function(self, func):
         self.current_function = func
 
@@ -100,17 +135,22 @@ class Assembler:
         self.label(func.name)
 
         # TODO: support registercall
-        if func.calling_convention == CallingConv.STACK_CALL:
-            self.free_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
-            self.temp_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
-        elif func.calling_convention == CallingConv.REGISTER_CALL:
-            self.free_regs = ['X', 'Y', 'Z', 'I', 'J'][::-1]
-            self.temp_regs = ['X', 'Y', 'Z', 'I', 'J'][::-1]
+        self.calle_saved = "XYZIJ"
+        self.caller_saved = "ABC"
 
+        # for register call we are not gonna use registers ABC for simplicity
+        if func.calling_convention == CallingConv.STACK_CALL:
+            self.temp_regs = ['A', 'B', 'C', 'Y', 'Z', 'I', 'J']
+        elif func.calling_convention == CallingConv.REGISTER_CALL:
+            self.temp_regs = ['Y', 'Z', 'I', 'J']
+
+        self.free_regs = self.temp_regs[::-1]
+
+        # Allocate the variable locations
         for var in func.vars:
             var = func.vars[var]
             size = var.type.sizeof()
-            var.storage = RegisterOffset('SP', self.stack_size)
+            var.storage = RegisterOffset('X', self.stack_size)
             self.stack_size += size
 
         # need to skip one for the return pointer
@@ -118,7 +158,7 @@ class Assembler:
         passed = 0
         for arg in reversed(func.args):
             if func.calling_convention == CallingConv.STACK_CALL:
-                arg.storage = RegisterOffset('SP', offset)
+                arg.storage = RegisterOffset('X', offset)
                 offset += arg.type.sizeof()
 
             elif func.calling_convention == CallingConv.REGISTER_CALL:
@@ -129,13 +169,18 @@ class Assembler:
                 elif passed == 2:
                     arg.storage = 'C'
                 else:
-                    arg.storage = RegisterOffset('SP', offset)
+                    arg.storage = RegisterOffset('X', offset)
                     offset += arg.type.sizeof()
 
             passed += 1
 
         if self.stack_size != 0:
             self.append(f'SUB SP, {self.stack_size}')
+
+        self.load('X', 'SP')
+
+        # this is where we want to place stuff
+        self.function_entry = len(self.code)
 
         for var in func.vars:
             var = func.vars[var]
@@ -144,6 +189,8 @@ class Assembler:
 
     def exit_function(self, ret_val=None):
         assert self.current_function is not None
+
+        self.function_exits.append(len(self.code))
 
         if self.stack_size != 0:
             self.append(f'ADD SP, {self.stack_size}')
@@ -166,7 +213,7 @@ class Assembler:
     def label(self, name):
         if self.syntax == AssemblerSyntax.SCA:
             self.code.append(f'{name}:')
-        elif self.syntax == AssemblerSyntax.NOTCH:
+        elif self.syntax == AssemblerSyntax.DASM16:
             self.code.append(f':{name}')
         else:
             assert False
@@ -175,4 +222,6 @@ class Assembler:
         self.code.append('\t' + line)
 
     def generate(self):
+        if self.current_function is not None:
+            self._fixup_last_function()
         return '\n'.join(self.code)

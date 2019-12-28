@@ -374,12 +374,16 @@ class ExprBinary(Expr):
                 self.left.compile(asm, operand)
 
             if self.right.is_pure():
-                asm.append(f'{ops[self.op]} {operand}, {self.right.eval()}')
+                if operand is not None:
+                    asm.append(f'{ops[self.op]} {operand}, {self.right.eval()}')
             else:
-                temp = asm.allocate_temp()
-                self.right.compile(asm, temp)
-                asm.append(f'{ops[self.op]} {operand}, {temp}')
-                asm.free_temp(temp)
+                if operand is None:
+                    self.right.compile(asm, None)
+                else:
+                    temp = asm.allocate_temp()
+                    self.right.compile(asm, temp)
+                    asm.append(f'{ops[self.op]} {operand}, {temp}')
+                    asm.free_temp(temp)
 
 
 class ExprCast(Expr):
@@ -593,7 +597,7 @@ class CompilationUnit:
         return None
 
     def compile(self):
-        asm = Assembler(AssemblerSyntax.NOTCH)
+        asm = Assembler(AssemblerSyntax.DASM16)
         for symbol in self.symbols:
             self.symbols[symbol].compile(asm)
         return asm.generate()

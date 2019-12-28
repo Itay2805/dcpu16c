@@ -314,9 +314,8 @@ class Tokenizer:
                     'short',
                     'int',
                     'long',
+                    'float',
                     'double',
-                    '_Bool',
-                    '_Complex',
 
                     'struct',
                     'enum',
@@ -330,10 +329,10 @@ class Tokenizer:
                     'inline',
 
                     'sizeof',
-                    '_Alignof',
-                    '_Static_assert',
-                    '__attribute__',
-                    'asm'
+                    'asm',
+
+                    '__regcall',
+                    '__stackcall',
                 ]:
                     self.token = KeywordToken(pos, value)
                 else:
