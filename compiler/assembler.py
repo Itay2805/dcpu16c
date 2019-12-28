@@ -47,6 +47,8 @@ class Assembler:
         self.free_regs = []
         # registers that we used
         self.used_regs = []
+        # registers to save on call
+        self.save_on_call = []
         # the function entry point
         self.function_entry = 0
         # all the function exit points
@@ -71,8 +73,10 @@ class Assembler:
         """
         assert len(self.free_regs) != 0
         reg = self.free_regs.pop()
-        if reg in self.calle_saved:
+        if reg in self.calle_saved and reg not in self.used_regs:
             self.used_regs.append(reg)
+        if reg in self.caller_saved:
+            self.save_on_call.append(reg)
         return reg
 
     def get_ret(self):
@@ -80,8 +84,9 @@ class Assembler:
         Get the return value register
         """
         # TODO: handle if this is not the case
-        assert 'A' in self.free_regs
-        self.free_regs.remove('A')
+        # assert 'A' in self.free_regs
+        if 'A' in self.free_regs:
+            self.free_regs.remove('A')
         return 'A'
 
     def free_temp(self, temp):
@@ -92,6 +97,10 @@ class Assembler:
             if temp.reg not in self.temp_regs:
                 return
             temp = temp.reg
+
+        if temp in self.save_on_call:
+            self.save_on_call.remove(temp)
+
         self.free_regs.append(temp)
 
     def load(self, op1, op2):
@@ -101,6 +110,49 @@ class Assembler:
         assert op2 is not None
         if op1 is not None and op1 != op2:
             self.append(f'SET {op1}, {op2}')
+
+    # TODO: allow for non-native types (like structs)
+    def prepare_call(self, argscount, callconv: CallingConv):
+        # store calle saved
+        for reg in self.save_on_call:
+            self.load('PUSH', reg)
+
+        if callconv == CallingConv.REGISTER_CALL:
+            if argscount > 3:
+                self.append(f'SUB SP, {argscount - 3}')
+        elif callconv == CallingConv.STACK_CALL:
+            if argscount > 0:
+                self.append(f'SUB SP, {argscount}')
+        else:
+            assert False
+
+    def get_arg_location(self, index, callconv: CallingConv):
+        if callconv == CallingConv.REGISTER_CALL:
+            if index == 0:
+                return 'A'
+            elif index == 1:
+                return 'B'
+            elif index == 2:
+                return 'C'
+            else:
+                return RegisterOffset('SP', index - 3)
+        elif callconv == CallingConv.STACK_CALL:
+            return RegisterOffset('SP', index)
+
+    def clean_call(self, argcount, callconv: CallingConv):
+        # Clean the pushed arguments
+        if callconv == CallingConv.STACK_CALL:
+            if argcount > 0:
+                self.append(f'SUB SP, {argcount}')
+        elif callconv == CallingConv.REGISTER_CALL:
+            if argcount > 3:
+                self.append(f'SUB SP, {argcount - 3}')
+        else:
+            assert False
+
+        # restore calle saved
+        for reg in reversed(self.save_on_call):
+            self.load(reg, 'POP')
 
     def goto(self, label):
         """
@@ -126,9 +178,20 @@ class Assembler:
         for reg in self.used_regs:
             self.code.insert(self.function_entry, f'\tSET PUSH, {reg}')
 
+        # reset the stuff related to function code gen
+        self.free_regs = []
+        self.used_regs = []
+        self.save_on_call = []
+        self.function_entry = 0
+        self.function_exits = []
+        self.temp_stack = 0
+        self.stack_size = 0
         self.current_function = None
 
     def enter_function(self, func):
+        if self.current_function is not None:
+            self._fixup_last_function()
+
         self.current_function = func
 
         self.code.append('')
@@ -144,6 +207,7 @@ class Assembler:
         elif func.calling_convention == CallingConv.REGISTER_CALL:
             self.temp_regs = ['Y', 'Z', 'I', 'J']
 
+        # reset the free regs
         self.free_regs = self.temp_regs[::-1]
 
         # Allocate the variable locations
@@ -164,10 +228,13 @@ class Assembler:
             elif func.calling_convention == CallingConv.REGISTER_CALL:
                 if passed == 0:
                     arg.storage = 'A'
+                    self.save_on_call.append('A')
                 elif passed == 1:
                     arg.storage = 'B'
+                    self.save_on_call.append('B')
                 elif passed == 2:
                     arg.storage = 'C'
+                    self.save_on_call.append('C')
                 else:
                     arg.storage = RegisterOffset('X', offset)
                     offset += arg.type.sizeof()

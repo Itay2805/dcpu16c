@@ -65,7 +65,9 @@ class ExprIdentLiteral(Expr):
         if var is not None:
             return var.type
         else:
-            assert False
+            typ = func.unit.get_symbol(self.name)
+            assert typ is not None
+            return typ
 
     def is_lvalue(self):
         return True
@@ -224,6 +226,29 @@ class ExprPostfix(Expr):
                 asm.load(operand, addr)
                 asm.append(f'ADD {addr}, 1')
                 asm.free_temp(addr)
+
+
+class ExprCall(Expr):
+
+    def __init__(self, pos, func: Expr, params: List[Expr]):
+        self.pos = pos
+        self.func = func
+        self.params = params
+
+    def compile(self, asm: Assembler, operand):
+        if isinstance(self.func, ExprIdentLiteral):
+            func = self.func.resolve_type(asm.current_function)
+            assert isinstance(func, FunctionDeclaration)
+
+            asm.prepare_call(len(self.params), func.calling_convention)
+            for i in range(len(self.params)):
+                self.params[i].compile(asm, asm.get_arg_location(i, func.calling_convention))
+            asm.append(f'JSR {func.name}')
+            asm.load(operand, 'A')
+            asm.clean_call(len(self.params), func.calling_convention)
+
+        else:
+            assert False
 
 
 class ExprBinary(Expr):
@@ -540,6 +565,7 @@ class VariableDeclaration:
 class FunctionDeclaration:
 
     def __init__(self):
+        self.unit = None  # type: CompilationUnit
         self.calling_convention = CallingConv.STACK_CALL
         self.name = None  # type: str
         self.ret_type = None  # type: CType

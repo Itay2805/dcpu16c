@@ -102,7 +102,7 @@ class Parser(Tokenizer):
             val = self.token.value
             pos = self.token.pos
             self.next_token()
-            if self.current_function.get_var(val) is None:
+            if self.current_function.get_var(val) is None and self.unit.get_symbol(val) is None and self.current_function.name != val:
                 self.token.pos = pos
                 self.report_error(f'`{val}` undeclared')
             return ExprIdentLiteral(pos, val)
@@ -146,6 +146,19 @@ class Parser(Tokenizer):
                 self.report_error('array subscript is not an integer')
 
             return ExprDeref(self._expand_pos(e.pos, temp_pos), ExprBinary(None, e, '+', sub))
+
+        elif self.match_token('('):
+            args = []
+            temp_pos = self.token.pos
+            while not self.match_token(')'):
+                args.append(self._parse_assignment())
+                if not self.is_token(')'):
+                    self.expect_token(',')
+                temp_pos = self.token.pos
+
+            # TODO: type checking
+
+            return ExprCall(self._expand_pos(e.pos, temp_pos), e, args)
 
         return e
 
@@ -449,10 +462,12 @@ class Parser(Tokenizer):
 
         return typ
 
-    def _parse_func(self, is_static: bool, name: str, ret_type: CType):
+    def _parse_func(self, conv: CallingConv, is_static: bool, name: str, ret_type: CType):
         func = FunctionDeclaration()
+        func.unit = self.unit
         func.name = name
         func.ret_type = ret_type
+        func.calling_convention = conv
         func.static = is_static
         self.current_function = func
 
@@ -544,16 +559,23 @@ class Parser(Tokenizer):
             else:
                 # Reset the state
                 is_static = False
+                conv = CallingConv.STACK_CALL
 
                 # Handle modifiers for global variables and functions
                 while True:
                     # Static modifier
-                    if self.is_token('static'):
+                    if self.is_keyword('static'):
                         if is_static:
                             self.report_error('duplicate `static`')
 
                         self.next_token()
                         is_static = True
+
+                    elif self.match_keyword('__regcall'):
+                        conv = CallingConv.REGISTER_CALL
+
+                    elif self.match_keyword('__stackcall'):
+                        conv = CallingConv.STACK_CALL
 
                     # No more modifiers
                     else:
@@ -567,7 +589,7 @@ class Parser(Tokenizer):
 
                 # Check if a function
                 if self.is_token('('):
-                    func = self._parse_func(is_static, name, typ)
+                    func = self._parse_func(conv, is_static, name, typ)
 
                     # Defined Function
                     if func.stmts is not None:
