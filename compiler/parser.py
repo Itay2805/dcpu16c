@@ -21,10 +21,16 @@ class Parser(Tokenizer):
         GREEN = '\033[32m'
         RED = '\033[31m'
 
+        if self.current_function is not None:
+            print(f'{BOLD}{self.filename}:{RESET} In function `{BOLD}{self.current_function.name}{RESET}`')
+
         print(f'{BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{RESET} {RED}{BOLD}error:{RESET} {msg}')
         line = self.lines[pos.start_line]
         line = line[:pos.start_column] + BOLD + line[pos.start_column:pos.end_column] + RESET + line[pos.end_column:]
+
+        # TODO: color the place in the line
         print(line)
+
         c = ''
         for i in range(pos.start_column):
             if self.lines[pos.start_line][i] == '\t':
@@ -96,6 +102,9 @@ class Parser(Tokenizer):
             val = self.token.value
             pos = self.token.pos
             self.next_token()
+            if self.current_function.get_var(val) is None:
+                self.token.pos = pos
+                self.report_error(f'`{val}` undeclared')
             return ExprIdentLiteral(pos, val)
 
         elif self.match_token('('):
@@ -440,20 +449,28 @@ class Parser(Tokenizer):
 
         return typ
 
-    def _parse_func(self, is_static: bool):
+    def _parse_func(self, is_static: bool, name: str, ret_type: CType):
         func = FunctionDeclaration()
+        func.name = name
+        func.ret_type = ret_type
         func.static = is_static
         self.current_function = func
 
         # Get the params
         self.expect_token('(')
-        # while self.match_token(','):
-        #     typ = self._parse_type(True)
-        #     name = None
-        #     if not self.is_token(','):
-        #         name, pos = self.expect_ident()
-        #     func.add_arg(name, typ)
-        self.expect_token(')')
+
+        def parse_arg():
+            typ = self._parse_type(True)
+            name = None
+            if not self.is_token(','):
+                name, pos = self.expect_ident()
+            func.add_arg(name, typ)
+
+        if not self.match_token(')'):
+            parse_arg()
+            while self.match_token(','):
+                parse_arg()
+            self.expect_token(')')
 
         if self.is_token(';'):
             # Just a function prototype
@@ -550,9 +567,7 @@ class Parser(Tokenizer):
 
                 # Check if a function
                 if self.is_token('('):
-                    func = self._parse_func(is_static)
-                    func.name = name
-                    func.ret_type = typ
+                    func = self._parse_func(is_static, name, typ)
 
                     # Defined Function
                     if func.stmts is not None:

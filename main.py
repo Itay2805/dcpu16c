@@ -6,8 +6,8 @@ if __name__ == '__main__':
 void another_function();
 
 void main() {
-    int* a = 456;
-    a[10] = 123;
+    void* a = 213;
+    *(int*)a = 456;
 }
 """)
     print(parser.parse().compile())

@@ -100,14 +100,39 @@ class Assembler:
         self.label(func.name)
 
         # TODO: support registercall
-        self.free_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
-        self.temp_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
+        if func.calling_convention == CallingConv.STACK_CALL:
+            self.free_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
+            self.temp_regs = ['A', 'B', 'C', 'X', 'Y', 'Z', 'I', 'J'][::-1]
+        elif func.calling_convention == CallingConv.REGISTER_CALL:
+            self.free_regs = ['X', 'Y', 'Z', 'I', 'J'][::-1]
+            self.temp_regs = ['X', 'Y', 'Z', 'I', 'J'][::-1]
 
         for var in func.vars:
             var = func.vars[var]
             size = var.type.sizeof()
             var.storage = RegisterOffset('SP', self.stack_size)
             self.stack_size += size
+
+        # need to skip one for the return pointer
+        offset = self.stack_size + 1
+        passed = 0
+        for arg in reversed(func.args):
+            if func.calling_convention == CallingConv.STACK_CALL:
+                arg.storage = RegisterOffset('SP', offset)
+                offset += arg.type.sizeof()
+
+            elif func.calling_convention == CallingConv.REGISTER_CALL:
+                if passed == 0:
+                    arg.storage = 'A'
+                elif passed == 1:
+                    arg.storage = 'B'
+                elif passed == 2:
+                    arg.storage = 'C'
+                else:
+                    arg.storage = RegisterOffset('SP', offset)
+                    offset += arg.type.sizeof()
+
+            passed += 1
 
         if self.stack_size != 0:
             self.append(f'SUB SP, {self.stack_size}')

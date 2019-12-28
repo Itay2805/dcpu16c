@@ -536,21 +536,25 @@ class VariableDeclaration:
 class FunctionDeclaration:
 
     def __init__(self):
+        self.calling_convention = CallingConv.STACK_CALL
         self.name = None  # type: str
         self.ret_type = None  # type: CType
-        self.args = []  # type: List[Tuple[str, CType]]
+        self.args = []  # type: List[VariableDeclaration]
         self.static = False  # type: bool
         self.stmts = None  # type: StmtBlock
         self.vars = {}  # type: Dict[str, VariableDeclaration]
 
     def add_arg(self, name: str, typ: CType):
-        self.args.append((name, typ))
+        self.args.append(VariableDeclaration(name, typ, None))
 
     def add_var(self, name: str, typ: CType, expr: Expr):
         assert name not in self.vars
         self.vars[name] = VariableDeclaration(name, typ, expr)
 
     def get_var(self, name: str):
+        for arg in self.args:
+            if arg.name == name:
+                return arg
         if name in self.vars:
             return self.vars[name]
         return None
