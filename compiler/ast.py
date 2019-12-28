@@ -309,22 +309,19 @@ class ExprBinary(Expr):
                 asm.free_temp(right_res)
 
         # assignment
-        # TODO: maybe turn into left = left op right instead
-        elif self.op[-1] == '=':
+        elif self.op == '=':
             assert self.left.is_lvalue()
+
+            addr = self.left.addrof(asm)
 
             # Eval the right value
             if self.right.is_pure():
-                asm.load(operand, self.right.eval())
+                asm.load(addr, self.right.eval())
             else:
-                self.right.compile(asm, operand)
-
-            # If the op is an assignment and something else then eval it
-            if len(self.op[:-1]) != 0:
-                asm.append(f'{ops[self.op[:-1]]} {operand}, {self.left.addrof(asm)}')
+                self.right.compile(asm, addr)
 
             # Store it
-            asm.load(self.left.addrof(asm), operand)
+            asm.load(operand, addr)
 
         # normal math
         else:

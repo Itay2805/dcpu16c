@@ -6,13 +6,9 @@ if __name__ == '__main__':
 void another_function();
 
 void main() {
-    int a = 10;
-    int b = 0;
-    while(a != b) {
-        b++;
-    }
+    int a = 12;
     
-    while(1);
+    a += 123;
 }
 """)
     print(parser.parse().compile())

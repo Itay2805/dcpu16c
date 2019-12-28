@@ -298,8 +298,13 @@ class Parser(Tokenizer):
 
             self.next_token()
             e2 = self._parse_assignment()
-            self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, op.value, e2)
+
+            # if has an operational assignment, then turn into the operation
+            if op.value != '=':
+                self._check_binary_op(op, e1, e2)
+                e2 = ExprBinary(op.pos, e1, op.value[:-1], e2)
+
+            e1 = ExprBinary(self._expand_pos(e1.pos, self.token.pos), e1, '=', e2)
 
         return e1
 

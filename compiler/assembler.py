@@ -60,7 +60,7 @@ class Assembler:
         assert False
 
     def load(self, op1, op2):
-        if op1 is not None:
+        if op1 is not None and op2 is not None and op1 != op2:
             self.append(f'SET {op1}, {op2}')
 
     def goto(self, label):
