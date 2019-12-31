@@ -274,7 +274,7 @@ class Parser(Tokenizer):
         return ret
 
     def _temp(self) -> Expr:
-        ret = self._def_param(f'$TEMP{self._temp_counter}')
+        ret = self._def_var(f'$TEMP{self._temp_counter}')
         self._temp_counter += 1
         return ret
 
