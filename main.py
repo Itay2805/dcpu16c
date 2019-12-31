@@ -4,21 +4,37 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""
-int main(int c) {
-    return c ? 0 : 1;
+int find(int c, char* s) {
+    return *s ? *s == c ? 1 : find(c, s + 1) : 0;
 }
 """)
 
-    print('AST: \n')
-
     ast = parser.parse()
-    ast._do_constant_folding()
+
+    print('AST:')
+    print('------------------------------')
     for func in ast.func_list:
         print(func)
+    print('------------------------------')
+
+    ast.optimize()
+
+    print('Optimized AST:')
+    print('------------------------------')
+    for func in ast.func_list:
+        print(func)
+    print('------------------------------')
 
     comp = IRCompiler(ast)
     comp.compile()
 
-    print('\nIR: \n')
-
+    print('IR:')
+    print('------------------------------')
     print(str(comp))
+    print('------------------------------')
+
+    comp.optimize()
+    print('Optimized IR:')
+    print('------------------------------')
+    print(str(comp))
+    print('------------------------------')

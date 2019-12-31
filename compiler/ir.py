@@ -2,13 +2,18 @@ from compiler.parser import Parser
 from compiler.ast import *
 
 
-all_nodes = []
-
-
 class IRReg:
 
     def __init__(self, num):
         self.num = num
+
+    def __eq__(self, other):
+        if isinstance(other, IRReg):
+            return self.num == other.num
+        return False
+
+    def __ne__(self, other):
+        return not (self == other)
 
     def __str__(self):
         return f'R{self.num}'
@@ -18,7 +23,12 @@ class IRInst:
 
     def __init__(self):
         self.next = None  # type: None or IRInst
-        all_nodes.append(self)
+
+    def num_write_regs(self):
+        raise NotImplementedError
+
+    def has_side_effects(self):
+        return False
 
     def __hash__(self):
         return id(self)
@@ -28,6 +38,9 @@ class IRNop(IRInst):
 
     def __init__(self):
         super(IRNop, self).__init__()
+
+    def num_write_regs(self):
+        return 0
 
     def __str__(self):
         return 'NOP'
@@ -43,6 +56,9 @@ class IRInit(IRInst):
         self.p0 = p0
         self.ident = ident
         self.value = value
+
+    def num_write_regs(self):
+        return 1
 
     def __str__(self):
         return f'INIT {self.p0}, \"{self.ident}\", {self.value}'
@@ -60,6 +76,9 @@ class IRMath(IRInst):
         self.p2 = p2
         self.op = op
 
+    def num_write_regs(self):
+        return 1
+
     def __str__(self):
         return f'{self.op} {self.p0}, {self.p1}, {self.p2}'
 
@@ -73,6 +92,9 @@ class IRCopy(IRInst):
         super(IRCopy, self).__init__()
         self.p0 = p0
         self.p1 = p1
+
+    def num_write_regs(self):
+        return 1
 
     def __str__(self):
         return f'COPY {self.p0}, {self.p1}'
@@ -92,6 +114,9 @@ class IRAddrof(IRInst):
         self.p0 = p0
         self.p1 = p1
 
+    def num_write_regs(self):
+        return 1
+
     def __str__(self):
         return f'ADDROF {self.p0}, {self.p1}'
 
@@ -105,6 +130,9 @@ class IRRead(IRInst):
         super(IRRead, self).__init__()
         self.p0 = p0
         self.p1 = p1
+
+    def num_write_regs(self):
+        return 1
 
     def __str__(self):
         return f'READ {self.p0}, {self.p1}'
@@ -120,9 +148,11 @@ class IRWrite(IRInst):
         self.p0 = p0
         self.p1 = p1
 
+    def num_write_regs(self):
+        return 0
+
     def __str__(self):
         return f'WRITE {self.p0}, {self.p1}'
-
 
 
 class IRIfnz(IRInst):
@@ -134,6 +164,12 @@ class IRIfnz(IRInst):
         super(IRIfnz, self).__init__()
         self.p0 = p0
         self.branch = branch
+
+    def num_write_regs(self):
+        return 0
+
+    def has_side_effects(self):
+        return True
 
     def __str__(self):
         return f'IFNZ {self.p0}'
@@ -150,6 +186,9 @@ class IRFCall(IRInst):
         self.p1 = p1
         self.params = params
 
+    def num_write_regs(self):
+        return 1
+
     def __str__(self):
         s = f'FCALL {self.p0}, {self.p1}'
         for param in self.params:
@@ -165,6 +204,12 @@ class IRRet(IRInst):
     def __init__(self, p0: IRReg):
         super(IRRet, self).__init__()
         self.p0 = p0
+
+    def num_write_regs(self):
+        return 0
+
+    def has_side_effects(self):
+        return True
 
     def __str__(self):
         return f'RET {self.p0}'
@@ -208,6 +253,11 @@ class IRCompiler:
             ExprAddrof: self._compile_addrof,
             ExprCall: self._compile_call,
         }
+
+        self.optimizations = [
+            self._optimize_delete_nops,
+            self._optimize_jump_threading,
+        ]
 
     ####################################################################################################################
     # The different expression complications
@@ -379,6 +429,141 @@ class IRCompiler:
         for func in self.ast.func_list:
             self._compile_function(func)
 
+    ####################################################################################################################
+    # Optimization
+    ####################################################################################################################
+
+    def _get_all_nodes(self):
+        # get all the nodes inside the ir
+        all_nodes = set()
+        for func in self.entry_points:
+            c = self.entry_points[func]
+
+            def iterate_all_nodes(node):
+                while node is not None:
+                    # if already found this we can be assured
+                    # the rest were found as well
+                    if node in all_nodes:
+                        break
+
+                    # add the node we are looking at
+                    all_nodes.add(node)
+
+                    # if found a branch then go to it
+                    if isinstance(node, IRIfnz):
+                        iterate_all_nodes(node.branch)
+
+                    # go to the next node
+                    node = node.next
+
+            iterate_all_nodes(c)
+
+        return all_nodes
+
+    def _optimize_delete_nops(self, nodes):
+        changed = False
+        visited = set()
+
+        def reduce_nop_chain(p: IRInst):
+            nonlocal changed
+
+            # will return the first element which is not a:
+            # - NOP
+            # - COPY with both sides being the same
+            # - IFNZ with both branches being the same
+            while p is not None:
+                if not isinstance(p, IRNop) and \
+                   not (isinstance(p, IRIfnz) and (p.next == p.branch or p.branch is None)) and\
+                   not (isinstance(p, IRCopy) and p.p0 == p.p1):
+                    return p
+                # We changed something
+                changed = True
+                p = p.next
+
+        # reduce nops from functions entries
+        for t in self.entry_points:
+            self.entry_points[t] = reduce_nop_chain(self.entry_points[t])
+
+        for s in nodes:
+            # Make sure we do not revisit nodes
+            if hash(s) in visited:
+                continue
+            visited.add(hash(s))
+
+            # remove nops from the next
+            s.next = reduce_nop_chain(s.next)
+
+            # Make sure to remove nops from the branch
+            if isinstance(s, IRIfnz):
+                s.branch = reduce_nop_chain(s.branch)
+
+            # Remove everything after a RET
+            elif isinstance(s, IRRet):
+                if s.next is not None:
+                    changed = True
+                    s.next = None
+
+        return changed
+
+    def _optimize_jump_threading(self, nodes):
+        changed = False
+
+        for node in nodes:
+            # if an ifnz checks a register and the next ifnz also checks for
+            # the same register we can combine the jumps
+            while isinstance(node, IRIfnz) and\
+                    node.next is not None and\
+                    isinstance(node.next, IRIfnz) and\
+                    node.p0 == node.next.p0 and\
+                    node.next != node.next.next:
+                node.next = node.next.next
+                changed = True
+
+            # same with the branch
+            while isinstance(node, IRIfnz) and \
+                    node.branch is not None and \
+                    isinstance(node.branch, IRIfnz) and \
+                    node.p0 == node.branch.p0 and \
+                    node.branch != node.branch.branch:
+                node.branch = node.branch.branch
+                changed = True
+
+            # If we have an init and then an ifnz right after it we can know right
+            # away if there will be a branch or not
+            while isinstance(node, IRInit) and\
+                    node.ident == '' and\
+                    node.next is not None and\
+                    isinstance(node.next, IRIfnz) and\
+                    node.p0 == node.next.p0:
+                node.next = node.next.branch if node.value else node.next.next
+                changed = True
+
+            # if we do a copy and then do a ret with the parameter we copied to
+            # then we can just return the parameter we copied from
+            while isinstance(node, IRCopy) and\
+                    node.next is not None and\
+                    isinstance(node.next, IRRet) and\
+                    node.p0 == node.next.p0:
+                node = IRRet(node.p1)
+                changed = True
+
+        return changed
+
+    # TODO: tree merging, can make the code alot smaller (won't make it faster tho)
+
+    def optimize(self):
+        nodes = self._get_all_nodes()
+        while nodes is not None:
+            changed = False
+            for opt in self.optimizations:
+                if opt(nodes):
+                    changed = True
+            nodes = self._get_all_nodes() if changed else None
+
+    ####################################################################################################################
+    # Debug
+    ####################################################################################################################
+
     def __str__(self):
 
         label_count = 0
@@ -405,6 +590,8 @@ class IRCompiler:
             statistics[ir] = Data()
             statistics[ir].labels.append(func)
 
+        all_nodes = self._get_all_nodes()
+
         for node in all_nodes:
             # Handle the next element
             if node.next not in statistics:
@@ -426,8 +613,6 @@ class IRCompiler:
         while len(remaining_insts) != 0:
             chain = remaining_insts.pop()
             while chain is not None:
-
-
 
                 stats = statistics[chain]
                 was = stats.done

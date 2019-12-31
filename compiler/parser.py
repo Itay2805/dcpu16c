@@ -226,7 +226,7 @@ class Parser(Tokenizer):
 
         return expr
 
-    def _do_constant_folding(self):
+    def optimize(self):
         last = str(self)
 
         self._find_pure_functions()

@@ -6,6 +6,9 @@ The reason I am creating this compiler is so I can eventually use it to write
 some simple OS for the DCPU16, and because I like C and I can't find anything 
 that I can port easily I will just create my own :shrug:
 
+This was heavily influenced by Bisqwit's compiler series and was modified to work with this language
+and support whatever that my language support and the series's language did not (global variables for example)
+
 ## Example 
 
 ```c
