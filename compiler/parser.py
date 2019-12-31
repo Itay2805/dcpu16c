@@ -100,6 +100,9 @@ class Parser(Tokenizer):
                     count += 1
 
     def _constant_fold(self, expr, stmt):
+        # TODO: on assign expressions we can probably do some kind of fold inside binary operation
+        #       so (5 + (a = 5)) can turn into (a = 5, 10)
+
         if isinstance(expr, ExprComma):
             new_exprs = []
             for i, e in enumerate(expr.exprs):
@@ -157,8 +160,11 @@ class Parser(Tokenizer):
                     return 1 if expr.left.value != 0 and expr.right.value != 0 else 0
 
                 # If we first have 0 we can just return 0
-                if isinstance(expr.left, ExprNumber) and expr.left.value == 0:
-                    return ExprNumber(0)
+                if isinstance(expr.left, ExprNumber):
+                    if expr.left.value == 0:
+                        return ExprNumber(0)
+                    else:
+                        return expr.right
 
                 # if the second is a 0 we can just replace this with a comma operator
                 if isinstance(expr.right, ExprNumber) and expr.left.value == 0:
@@ -169,13 +175,28 @@ class Parser(Tokenizer):
                 if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
                     return 1 if expr.left.value != 0 or expr.right.value != 0 else 0
 
-                # If the first is a 0, then we can just run the second
-                if isinstance(expr.left, ExprNumber) and expr.left.value == 0:
-                    return expr.right
+                # Left is constant
+                if isinstance(expr.left, ExprNumber):
+                    # if the left is a 0, then we can simply remove it and
+                    # return the right expression
+                    if expr.left.value == 0:
+                        return expr.right
 
-                # If we know the second is a 0 just run the first
-                if isinstance(expr.right, ExprNumber) and expr.right.value == 0:
-                    return expr.left
+                    # if left is 1, we can ommit the right expression
+                    else:
+                        return ExprNumber(1)
+
+                # Right is a const
+                if isinstance(expr.right, ExprNumber):
+                    # If the const is 0 then the left will be the one
+                    # who says what will happen
+                    if expr.right.value == 0:
+                        return expr.left
+
+                    # If the const is a 1, then it will always be 1
+                    # and we can always run the left
+                    else:
+                        return ExprComma().add(expr.left).add(ExprNumber(1))
 
             else:
                 # The numbers are know and we can calculate them
@@ -265,6 +286,7 @@ class Parser(Tokenizer):
 
     def _add_function(self, name: str):
         self.fun = Function(name)
+        self.fun.code = ExprComma()
         self.func_list.append(self.fun)
 
     def _push_scope(self):
@@ -290,8 +312,8 @@ class Parser(Tokenizer):
         GREEN = '\033[32m'
         RED = '\033[31m'
 
-        if self.current_function is not None:
-            print(f'{BOLD}{self.filename}:{RESET} In function `{BOLD}{self.current_function.name}{RESET}`')
+        if self.fun is not None:
+            print(f'{BOLD}{self.filename}:{RESET} In function `{BOLD}{self.fun.name}{RESET}`')
 
         print(f'{BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{RESET} {RED}{BOLD}error:{RESET} {msg}')
         line = self.lines[pos.start_line]
@@ -527,14 +549,14 @@ class Parser(Tokenizer):
     def _parse_equality(self):
         e1 = self._parse_relational()
         while self.is_token('==') or self.is_token('!='):
-            op = self.token
+            op = self.token.value
             self.next_token()
             e2 = self._parse_relational()
             # self._check_binary_op(op, e1, e2)
             if op == '==':
-                e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+                e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
             else:
-                e1 = ExprBinary(ExprBinary(e1, '==', e2), '==', ExprNumber(0))
+                e1 = ExprBinary(ExprBinary(e1, '==', e2), '==', ExprNumber(0), self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_and(self):
@@ -801,10 +823,13 @@ class Parser(Tokenizer):
                 if self.match_token('='):
                     expr = self._parse_assignment()
 
-                if self._def_var(name) is None:
+                new_var = self._def_var(name)
+                if new_var is None:
                     self.token.pos = pos
                     self.report_error(f'redefinition of `{name}`')
-                self.fun.code.add(expr)
+
+                if expr is not None:
+                    self.fun.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
 
             # Parse all the decls
             parse_var_decl()
@@ -819,7 +844,6 @@ class Parser(Tokenizer):
 
         # Continue and parse the block
         self._push_scope()
-        self.fun.code = ExprComma()
         self.fun.code.add(self._parse_stmt_block())
         self._pop_scope()
 

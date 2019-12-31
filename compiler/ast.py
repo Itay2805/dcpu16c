@@ -1,9 +1,12 @@
 from typing import *
+from compiler.tokenizer import CodePosition
 
 
 ########################################################################################################################
 # Identifier stuff
 ########################################################################################################################
+
+# TODO: just have a type instead of different thingies
 
 class Identifier:
 
@@ -60,7 +63,7 @@ class ExprNop(Expr):
 
 class ExprString(Expr):
 
-    def __init__(self, value: str, pos=Expr):
+    def __init__(self, value: str, pos=None):
         self.pos = pos
         self.value = value
 
@@ -78,7 +81,7 @@ class ExprString(Expr):
 
 class ExprNumber(Expr):
 
-    def __init__(self, value: int, pos=Expr):
+    def __init__(self, value: int, pos=None):
         self.pos = pos
         self.value = value
 
@@ -96,7 +99,7 @@ class ExprNumber(Expr):
 
 class ExprIdent(Expr):
 
-    def __init__(self, ident: Identifier, pos=Expr):
+    def __init__(self, ident: Identifier, pos=None):
         self.pos = pos
         self.ident = ident
 
@@ -114,7 +117,7 @@ class ExprIdent(Expr):
 
 class ExprBinary(Expr):
 
-    def __init__(self, left: Expr, op: str, right: Expr, pos=Expr):
+    def __init__(self, left: Expr, op: str, right: Expr, pos=None):
         self.pos = pos
 
         self.left = left
@@ -130,7 +133,7 @@ class ExprBinary(Expr):
 
 class ExprLoop(Expr):
 
-    def __init__(self, cond: Expr, body: Expr, pos=Expr):
+    def __init__(self, cond: Expr, body: Expr, pos=None):
         self.pos = pos
         self.cond = cond
         self.body = body
@@ -144,7 +147,7 @@ class ExprLoop(Expr):
 
 class ExprAddrof(Expr):
 
-    def __init__(self, expr: Expr, pos=Expr):
+    def __init__(self, expr: Expr, pos=None):
         self.pos = pos
         self.expr = expr
 
@@ -157,7 +160,7 @@ class ExprAddrof(Expr):
 
 class ExprDeref(Expr):
 
-    def __init__(self, expr: Expr, pos=Expr):
+    def __init__(self, expr: Expr, pos=None):
         self.pos = pos
         self.expr = expr
 
@@ -176,7 +179,7 @@ class ExprDeref(Expr):
 
 class ExprCall(Expr):
 
-    def __init__(self, func: Expr, args: List[Expr], pos=Expr):
+    def __init__(self, func: Expr, args: List[Expr], pos=None):
         self.pos = pos
         self.func = func
         self.args = args
@@ -198,7 +201,7 @@ class ExprCall(Expr):
 
 class ExprCopy(Expr):
 
-    def __init__(self, source: Expr, destination: Expr, pos=Expr):
+    def __init__(self, source: Expr, destination: Expr, pos=None):
         self.pos = pos
         self.source = source
         self.destination = destination
@@ -212,7 +215,8 @@ class ExprCopy(Expr):
 
 class ExprComma(Expr):
 
-    def __init__(self, pos=Expr):
+    def __init__(self, pos=None):
+        assert pos is None or isinstance(pos, CodePosition)
         self.pos = pos
         self.exprs = []
 
@@ -225,7 +229,7 @@ class ExprComma(Expr):
             self.exprs.append(expr)
 
         # Expand the position
-        if expr.pos is not None:
+        if self.pos is not None and expr.pos is not None:
             self.pos.end_line = expr.pos.end_line
             self.pos.end_column = expr.pos.end_column
 
@@ -233,7 +237,7 @@ class ExprComma(Expr):
 
     def is_pure(self, parser):
         for expr in self.exprs:
-            if not expr.is_pure():
+            if not expr.is_pure(parser):
                 return False
         return True
 
@@ -249,7 +253,7 @@ class ExprComma(Expr):
 
 class ExprReturn(Expr):
 
-    def __init__(self, expr: Expr, pos=Expr):
+    def __init__(self, expr: Expr, pos=None):
         self.pos = pos
         self.expr = expr
 
@@ -267,6 +271,8 @@ class ExprReturn(Expr):
 class Function:
 
     def __init__(self, name: str):
+        # TODO: typesss
+
         self.name = name
         self.code = None
         self.num_vars = 0
