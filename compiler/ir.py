@@ -570,8 +570,8 @@ class IRCompiler:
     # Optimization
     ####################################################################################################################
 
-    def get_access_info(self, follow_copies: bool, include_ifnz_as_writer: bool = False) -> AccessInfo:
-        return AccessInfo(self, follow_copies, include_ifnz_as_writer)
+    def get_access_info(self, follow_copies: bool, include_ifnz_as_writer: bool = False) -> Dict[IRInst, AccessInfo.Info]:
+        return AccessInfo(self, follow_copies, include_ifnz_as_writer).data
 
     def get_all_nodes(self):
         # get all the nodes inside the ir
@@ -600,6 +600,28 @@ class IRCompiler:
 
         return all_nodes
 
+    def _reach(self, frm: IRInst, to: IRInst, exclude: IRInst = None):
+        visited = set()
+        pending = [frm]  # type: List[IRInst]
+
+        while len(pending) != 0:
+            chain = pending.pop()
+
+            if chain == exclude or chain in visited:
+                continue
+            visited.add(chain)
+
+            if chain == to:
+                return True
+
+            if isinstance(chain, IRIfnz) and chain.branch is not None:
+                pending.append(chain.branch)
+
+            if chain.next is not None:
+                pending.append(chain.next)
+
+        return False
+
     def _optimize_delete_nops(self, nodes):
         changed = False
         info = self.get_access_info(False)
@@ -616,7 +638,7 @@ class IRCompiler:
             while p is not None:
                 reads_after_write = False
                 for i, _ in p.write_regs():
-                    if len(info.data[p].params[i]) != 0:
+                    if len(info[p].params[i]) != 0:
                         reads_after_write = True
                         break
 

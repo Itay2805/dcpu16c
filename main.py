@@ -4,8 +4,8 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""
-int find(int c, char* s) {
-    return *s ? *s == c ? 1 : find(c, s + 1) : 0;
+int eq(int a, int b, int yes, int no) {
+    return a != b ? yes : no;
 }
 """)
 
