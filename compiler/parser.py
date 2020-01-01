@@ -175,7 +175,7 @@ class Parser(Tokenizer):
             elif expr.op == '||':
                 # We know both
                 if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
-                    return 1 if expr.left.value != 0 or expr.right.value != 0 else 0
+                    return ExprNumber(1) if expr.left.value != 0 or expr.right.value != 0 else ExprNumber(0)
 
                 # Left is constant
                 if isinstance(expr.left, ExprNumber):
@@ -330,11 +330,13 @@ class Parser(Tokenizer):
 
         valid = False
 
-        if op in ['+', '-', '==']:
+        if op in ['+', '-', '==', '||', '&&']:
             valid = (isinstance(t1, CPointer) or isinstance(t1, CInteger)) and \
                    (isinstance(t2, CPointer) or isinstance(t2, CInteger))
         elif op in ['<<', '>>', '*', '/', '%', '&', '|', '^']:
             valid = isinstance(t1, CInteger) and isinstance(t2, CInteger)
+        else:
+            assert False
 
         if not valid:
             self.report_error(f'invalid operands to binary {op} (have `{t1}` and `{t2}`)', pos)
@@ -935,7 +937,10 @@ class Parser(Tokenizer):
         self._pop_scope()
 
         # Add an implicit `return 0;`
-        self.func.code.add(ExprReturn(ExprNumber(0)))
+        if isinstance(self.func.type.ret_type, CVoid):
+            self.func.code.add(ExprReturn(ExprNop()))
+        else:
+            self.func.code.add(ExprReturn(ExprNumber(0)))
 
     def parse(self):
         self._push_scope()
