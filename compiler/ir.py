@@ -675,14 +675,14 @@ class IRCompiler:
     def _optimize_jump_threading(self, nodes):
         changed = False
 
-        for i, node in enumerate(nodes):
-            # if an ifnz checks a register and the next ifnz also checks for
-            # the same register we can combine the jumps
-            while isinstance(node, IRIfnz) and\
-                    node.next is not None and\
-                    isinstance(node.next, IRIfnz) and\
-                    node.p0 == node.next.p0 and\
-                    node.next != node.next.next:
+        def reduce_it(node: IRInst):
+            nonlocal changed
+
+            while isinstance(node, IRIfnz) and \
+                        node.next is not None and\
+                        isinstance(node.next, IRIfnz) and\
+                        node.p0 == node.next.p0 and\
+                        node.next != node.next.next:
                 node.next = node.next.next
                 changed = True
 
@@ -708,12 +708,31 @@ class IRCompiler:
             # TODO: need to figure a way to convert a node completely...
             # if we do a copy and then do a ret with the parameter we copied to
             # then we can just return the parameter we copied from
-            # while isinstance(node, IRCopy) and\
-            #         node.next is not None and\
-            #         isinstance(node.next, IRRet) and\
-            #         node.p0 == node.next.p0:
-            #     node = IRRet(node.p1)
-            #     changed = True
+            while isinstance(node, IRCopy) and\
+                    node.next is not None and\
+                    isinstance(node.next, IRRet) and\
+                    node.p0 == node.next.p0:
+                node = IRRet(node.p1)
+                changed = True
+
+            return node
+
+        for t in self.entry_points:
+            self.entry_points[t] = reduce_it(self.entry_points[t])
+
+        for s in nodes:
+            # remove nops from the next
+            s.next = reduce_it(s.next)
+
+            # Make sure to remove nops from the branch
+            if isinstance(s, IRIfnz):
+                s.branch = reduce_it(s.branch)
+
+            # Remove everything after a RET
+            elif isinstance(s, IRRet):
+                if s.next is not None:
+                    changed = True
+                    s.next = None
 
         return changed
 

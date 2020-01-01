@@ -5,7 +5,7 @@ import dumper
 if __name__ == '__main__':
     parser = Parser("""
 int eq(int a, int b, int yes, int no) {
-    return a != b ? yes : no;
+    return a == b ? yes : no;
 }
 """)
 
