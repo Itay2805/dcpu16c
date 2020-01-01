@@ -11,8 +11,10 @@ class Parser(Tokenizer):
 
         self._scopes = []  # type: List[Dict[str, Identifier]]
         self.func_list = []  # type: List[Function]
-        self._fun = None  # type: Function
+        self.func = None  # type: Function
         self._temp_counter = 0
+
+        self.got_errors = False
 
     ####################################################################################################################
     # AST Level optimizations
@@ -255,26 +257,27 @@ class Parser(Tokenizer):
         self._scopes[-1][name] = ident
         return ExprIdent(ident)
 
-    def _def_var(self, name) -> Expr:
-        ret = self._define(name, VariableIdentifier(name, self.fun.num_vars))
+    def _def_var(self, name, typ) -> Expr:
+        ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
         if ret is None:
             return None
-        self.fun.num_vars += 1
+        self.func.vars.append(typ)
         return ret
 
-    def _def_param(self, name) -> Expr:
-        ret = self._define(name, ParameterIdentifier(name, self.fun.num_params))
+    def _def_param(self, name, typ) -> Expr:
+        ret = self._define(name, ParameterIdentifier(name, self.func.num_params))
         if ret is None:
             return None
-        self.fun.num_params += 1
+        self.func.type.arg_types.append(typ)
+        self.func.num_params += 1
         return ret
 
     def _def_fun(self, name) -> Expr:
         ret = self._define(name, FunctionIdentifier(name, len(self.func_list)))
         return ret
 
-    def _temp(self) -> Expr:
-        ret = self._def_var(f'$TEMP{self._temp_counter}')
+    def _temp(self, typ) -> Expr:
+        ret = self._def_var(f'$TEMP{self._temp_counter}', typ)
         self._temp_counter += 1
         return ret
 
@@ -284,10 +287,11 @@ class Parser(Tokenizer):
                 return ExprIdent(scope[name])
         return None
 
-    def _add_function(self, name: str):
-        self.fun = Function(name)
-        self.fun.code = ExprComma()
-        self.func_list.append(self.fun)
+    def _add_function(self, name: str, typ: CType):
+        self.func = Function(name)
+        self.func.type.ret_type = typ
+        self.func.code = ExprComma()
+        self.func_list.append(self.func)
 
     def _push_scope(self):
         self._scopes.append({})
@@ -295,31 +299,67 @@ class Parser(Tokenizer):
     def _pop_scope(self):
         self._scopes.pop()
 
-    def _combine_pos(self, pos1: CodePosition, pos2: CodePosition):
+    @staticmethod
+    def _combine_pos(pos1: CodePosition, pos2: CodePosition):
         if pos2 is None:
             return pos1
         return CodePosition(pos1.start_line, pos2.end_line, pos1.start_column, pos2.end_column)
+
+    def _check_assignment(self, e1: Expr, e2: Expr):
+        t1 = e1.resolve_type(self)
+        t2 = e2.resolve_type(self)
+
+        if isinstance(t1, CPointer) and isinstance(t2, CInteger):
+            self.report_warn('initialization makes pointer from integer without a cast', e2.pos)
+            return True
+        elif isinstance(t1, CInteger) and isinstance(t2, CPointer):
+            self.report_warn('initialization makes integer from pointer without a cast', e2.pos)
+            return True
+        elif isinstance(t1, CInteger) and isinstance(t2, CInteger):
+            return True
+        elif isinstance(t1, CPointer) and isinstance(t2, CPointer):
+            if t1.type != t2.type:
+                self.report_warn('initialization from incompatible pointer type', e2.pos)
+            return True
+        else:
+            assert False
+
+    def _check_binary_op(self, op: str, pos: CodePosition, e1: Expr, e2: Expr):
+        t1 = e1.resolve_type(self)
+        t2 = e2.resolve_type(self)
+
+        valid = False
+
+        if op in ['+', '-', '==']:
+            valid = (isinstance(t1, CPointer) or isinstance(t1, CInteger)) and \
+                   (isinstance(t2, CPointer) or isinstance(t2, CInteger))
+        elif op in ['<<', '>>', '*', '/', '%', '&', '|', '^']:
+            valid = isinstance(t1, CInteger) and isinstance(t2, CInteger)
+
+        if not valid:
+            self.report_error(f'invalid operands to binary {op} (have `{t1}` and `{t2}`)', pos)
 
     ####################################################################################################################
     # Error reporting
     ####################################################################################################################
 
-    def report_error(self, msg: str):
-        pos = self.token.pos
+    BOLD = '\033[01m'
+    RESET = '\033[0m'
+    GREEN = '\033[32m'
+    RED = '\033[31m'
+    YELLOW = '\033[33m'
 
-        BOLD = '\033[01m'
-        RESET = '\033[0m'
-        GREEN = '\033[32m'
-        RED = '\033[31m'
+    def report(self, typ: str, col: str, msg: str, pos=None):
+        if pos is None:
+            pos = self.token.pos
 
-        if self.fun is not None:
-            print(f'{BOLD}{self.filename}:{RESET} In function `{BOLD}{self.fun.name}{RESET}`')
+        if self.func is not None:
+            print(f'{Parser.BOLD}{self.filename}:{Parser.RESET} In function `{Parser.BOLD}{self.func.name}{Parser.RESET}`')
 
-        print(f'{BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{RESET} {RED}{BOLD}error:{RESET} {msg}')
+        print(f'{Parser.BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{Parser.RESET} {col}{Parser.BOLD}{typ}:{Parser.RESET} {msg}')
+
         line = self.lines[pos.start_line]
-        line = line[:pos.start_column] + BOLD + line[pos.start_column:pos.end_column] + RESET + line[pos.end_column:]
-
-        # TODO: color the place in the line
+        line = line[:pos.start_column] + Parser.BOLD + line[pos.start_column:pos.end_column] + Parser.RESET + line[pos.end_column:]
         print(line)
 
         c = ''
@@ -329,9 +369,21 @@ class Parser(Tokenizer):
             else:
                 c += ' '
 
-        print(c + BOLD + RED + '^' + '~' * (pos.end_column - pos.start_column - 1) + RESET)
+        print(c + Parser.BOLD + col + '^' + '~' * (pos.end_column - pos.start_column - 1) + Parser.RESET)
         print()
+
+    def report_error(self, msg: str, pos=None):
+        self.report('error', Parser.RED, msg, pos)
+        self.got_errors = True
+
+    def report_warn(self, msg: str, pos=None):
+        self.report('warning', Parser.YELLOW, msg, pos)
+
+    def report_fatal_error(self, msg: str, pos=None):
+        self.report('error', Parser.RED, msg, pos)
         exit(-1)
+
+    # TODO: warning
 
     ####################################################################################################################
     # Expression parsing
@@ -350,8 +402,7 @@ class Parser(Tokenizer):
             self.next_token()
             expr = self._use(val)
             if expr is None:
-                self.token.pos = pos
-                self.report_error(f'`{val}` undeclared')
+                self.report_fatal_error(f'`{val}` undeclared', pos)
             expr.pos = pos
             return expr
 
@@ -361,7 +412,7 @@ class Parser(Tokenizer):
             return expr
 
         else:
-            self.report_error(f'expected expression before {self.token}')
+            self.report_fatal_error(f'expected expression before {self.token}')
 
     def _parse_postfix(self):
         x = self._parse_literal()
@@ -377,14 +428,16 @@ class Parser(Tokenizer):
                 #     self.token.pos = pos
                 #     self.report_error('lvalue required as increment operand')
 
-                temp = self._temp()
+                self._check_binary_op(op, pos, x, ExprNumber(1))
+
+                temp = self._temp(x.resolve_type(self))
                 if x.is_pure(self):
                     x = ExprComma(self._combine_pos(x.pos, pos))\
                         .add(ExprCopy(x, temp))\
                         .add(ExprCopy(ExprBinary(x, op, ExprNumber(1)), x))\
                         .add(temp)
                 else:
-                    temp2 = self._temp()
+                    temp2 = self._temp(x.resolve_type(self))
                     x = ExprComma(self._combine_pos(x.pos, pos))\
                         .add(ExprCopy(ExprAddrof(x), temp))\
                         .add(ExprCopy(ExprDeref(temp), temp2))\
@@ -395,14 +448,14 @@ class Parser(Tokenizer):
                 sub = self._parse_expr()
                 temp_pos = self.token.pos
                 self.expect_token(']')
-                # arr_type = e.resolve_type(self.current_function)
-                # if not isinstance(arr_type, CPointer):
-                #     self.token.pos = pos
-                #     self.report_error('subscripted value is neither array nor pointer nor vector')
-                #
-                # if not isinstance(sub.resolve_type(self.current_function), CInteger):
-                #     self.token.pos = pos
-                #     self.report_error('array subscript is not an integer')
+
+                arr_type = x.resolve_type(self)
+                if not isinstance(arr_type, CPointer):
+                    self.report_fatal_error('subscripted value is neither array nor pointer', pos)
+
+                if not isinstance(sub.resolve_type(self), CInteger):
+                    self.report_error('array subscript is not an integer', pos)
+
                 return ExprDeref(ExprBinary(x, '+', sub), self._combine_pos(x.pos, temp_pos))
 
             elif self.match_token('('):
@@ -477,7 +530,7 @@ class Parser(Tokenizer):
             if e.is_pure(self):
                 return ExprCopy(ExprBinary(e, op, ExprNumber(1)), e)
             else:
-                temp = self._temp()
+                temp = self._temp(e.resolve_type(self))
                 return ExprComma()\
                     .add(ExprCopy(ExprAddrof(e), temp))\
                     .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1)), ExprDeref(temp)))
@@ -508,30 +561,33 @@ class Parser(Tokenizer):
     def _parse_multiplicative(self):
         e1 = self._parse_prefix()
         while self.is_token('*') or self.is_token('/') or self.is_token('%'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_prefix()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_additive(self):
         e1 = self._parse_multiplicative()
         while self.is_token('+') or self.is_token('-'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_multiplicative()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_shift(self):
         e1 = self._parse_additive()
         while self.is_token('>>') or self.is_token('<<'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_additive()
-            # self._check_binary_op(op, e1, e2)
+            self._check_binary_op(op, pos, e1, e2)
             e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
@@ -549,10 +605,11 @@ class Parser(Tokenizer):
     def _parse_equality(self):
         e1 = self._parse_relational()
         while self.is_token('==') or self.is_token('!='):
+            pos = self.token.pos
             op = self.token.value
             self.next_token()
             e2 = self._parse_relational()
-            # self._check_binary_op(op, e1, e2)
+            self._check_binary_op(op, pos, e1, e2)
             if op == '==':
                 e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
             else:
@@ -562,51 +619,56 @@ class Parser(Tokenizer):
     def _parse_bitwise_and(self):
         e1 = self._parse_equality()
         while self.is_token('&'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_equality()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_xor(self):
         e1 = self._parse_equality()
         while self.is_token('^'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_equality()
-            # self._check_binary_op(op, e1, e2)
+            self._check_binary_op(op, pos, e1, e2)
             e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_or(self):
         e1 = self._parse_equality()
         while self.is_token('|'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_equality()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_logical_and(self):
         e1 = self._parse_bitwise_or()
         while self.is_token('&&'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_bitwise_or()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_logical_or(self):
         e1 = self._parse_logical_and()
         while self.is_token('||'):
-            op = self.token
+            pos = self.token.pos
+            op = self.token.value
             self.next_token()
             e2 = self._parse_logical_and()
-            # self._check_binary_op(op, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            self._check_binary_op(op, pos, e1, e2)
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_conditional(self):
@@ -614,10 +676,17 @@ class Parser(Tokenizer):
 
         if self.match_token('?'):
             y = self._parse_conditional()
+            pos = self.token.pos
             self.expect_token(':')
             z = self._parse_conditional()
 
-            temp = self._temp()
+            yt = y.resolve_type(self)
+            zt = z.resolve_type(self)
+            if yt != zt:
+                self.report_error('type mismatch in conditional expression', pos)
+
+            # TODO: this could be awkward if the types mismatch in size
+            temp = self._temp(zt)
             x = ExprComma(self._combine_pos(x.pos, z.pos))\
                 .add(ExprBinary(ExprBinary(x, '&&', ExprComma().add(ExprCopy(y, temp)).add(ExprNumber(1))), '||', ExprCopy(z, temp)))\
                 .add(temp)
@@ -630,7 +699,7 @@ class Parser(Tokenizer):
         if self.is_token('=') or self.is_token('+=') or self.is_token('-=') or self.is_token('*=') or \
                 self.is_token('/=') or self.is_token('%=') or self.is_token('>>=') or self.is_token('<<=') or \
                 self.is_token('&=') or self.is_token('^=') or self.is_token('|='):
-            op = self.token
+            op = self.token.value
 
             # t1 = e1.resolve_type(self.current_function)
             # if not e1.is_lvalue() or isinstance(t1, FunctionDeclaration):
@@ -639,14 +708,16 @@ class Parser(Tokenizer):
             self.next_token()
             y = self._parse_assignment()
 
-            if op.value == '=':
+            self._check_assignment(x, y)
+
+            if op == '=':
                 x = ExprCopy(y, x, self._combine_pos(x.pos, y.pos))
             else:
                 op = op[:-1]
                 if x.is_pure(self):
                     return ExprCopy(ExprBinary(x, op, y), x, self._combine_pos(x.pos, y.pos))
                 else:
-                    temp = self._temp()
+                    temp = self._temp(CPointer(x.resolve_type(self)))
                     return ExprComma(self._combine_pos(x.pos, y.pos)).add(ExprCopy(ExprAddrof(x), temp)).add(ExprCopy(ExprBinary(ExprDeref(temp), op, y), ExprDeref(temp)))
 
         return x
@@ -687,10 +758,8 @@ class Parser(Tokenizer):
 
             if self.match_keyword('else'):
                 z = self._parse_stmt()
-                temp = self._temp()
                 return ExprComma(self._combine_pos(x.pos, z.pos))\
-                    .add(ExprBinary(ExprBinary(x, '&&', ExprComma().add(ExprCopy(y, temp)).add(ExprNumber(1))), '||', ExprCopy(z, temp)))\
-                    .add(temp)
+                    .add(ExprBinary(ExprBinary(x, '&&', ExprComma().add(y).add(ExprNumber(1))), '||', z))
             else:
                 return ExprBinary(x, "&&", y)
 
@@ -718,8 +787,19 @@ class Parser(Tokenizer):
 
         elif self.match_keyword('return'):
             stmt = ExprReturn(ExprNop())
+
             if not self.is_token(';'):
-                stmt.expr = self._parse_expr()
+                x = self._parse_expr()
+                if isinstance(self.func.type.ret_type, CVoid):
+                    self.report_warn('`return` with a value, in function returning void', pos)
+                    stmt.expr = ExprNop()
+                else:
+                    stmt.expr = x
+            else:
+                if not isinstance(self.func.type.ret_type, CVoid):
+                    self.report_warn('`return` with no value, in function returning non-void', pos)
+                    stmt.expr = ExprNumber(0)
+
             temp_pos = self.token.pos
             self.expect_token(';')
             stmt.pos = self._combine_pos(pos, temp_pos)
@@ -776,7 +856,7 @@ class Parser(Tokenizer):
             # TODO: check inside the known types
             if raise_error:
                 self.token.pos = pos
-                self.report_error(f'unknown type name `{name}`')
+                self.report_fatal_error(f'unknown type name `{name}`')
             else:
                 return None
         else:
@@ -796,10 +876,16 @@ class Parser(Tokenizer):
 
         def parse_arg():
             typ = self._parse_type(True)
+
             name, pos = self.expect_ident()
-            if self._def_param(name) is None:
+
+            # TODO: check complete
+            if isinstance(typ, CVoid):
+                self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos)
+
+            if self._def_param(name, typ) is None:
                 self.token.pos = pos
-                self.report_error(f'redefinition of `{name}`')
+                self.report_fatal_error(f'redefinition of `{name}`')
 
         if not self.match_token(')'):
             parse_arg()
@@ -823,13 +909,14 @@ class Parser(Tokenizer):
                 if self.match_token('='):
                     expr = self._parse_assignment()
 
-                new_var = self._def_var(name)
+                new_var = self._def_var(name, typ)
                 if new_var is None:
                     self.token.pos = pos
-                    self.report_error(f'redefinition of `{name}`')
+                    self.report_fatal_error(f'redefinition of `{name}`')
 
                 if expr is not None:
-                    self.fun.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
+                    self._check_assignment(new_var, expr)
+                    self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
 
             # Parse all the decls
             parse_var_decl()
@@ -844,11 +931,11 @@ class Parser(Tokenizer):
 
         # Continue and parse the block
         self._push_scope()
-        self.fun.code.add(self._parse_stmt_block())
+        self.func.code.add(self._parse_stmt_block())
         self._pop_scope()
 
         # Add an implicit `return 0;`
-        self.fun.code.add(ExprReturn(ExprNumber(0)))
+        self.func.code.add(ExprReturn(ExprNumber(0)))
 
     def parse(self):
         self._push_scope()
@@ -909,7 +996,7 @@ class Parser(Tokenizer):
                 # Check if a function
                 if self.is_token('('):
                     self._def_fun(name)
-                    self._add_function(name)
+                    self._add_function(name, typ)
                     self._parse_func()
 
                 # Assume global variable instead

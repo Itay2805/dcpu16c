@@ -1,3 +1,5 @@
+from typing import *
+
 
 class CType:
 
@@ -49,6 +51,7 @@ class CPointer(CType):
         return False
 
     def __str__(self):
+        # TODO: show the pointer type properly for functions
         return str(self.type) + '*'
 
 
@@ -65,3 +68,18 @@ class CVoid(CType):
 
     def __str__(self):
         return 'void'
+
+
+class CFunction(CType):
+
+    def sizeof(self):
+        return 1
+
+    def __init__(self):
+        self.ret_type = CVoid()  # type: CType
+        self.arg_types = []  # type: List[CType]
+
+    def __str__(self):
+        args = ', '.join(map(str, self.arg_types))
+        return f'{self.ret_type} (*)({args})'
+

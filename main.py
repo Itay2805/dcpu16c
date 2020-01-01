@@ -4,12 +4,15 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""
-int eq(int a, int b, int yes, int no) {
-    return a == b ? yes : no;
+void main() {
+    return; 
 }
 """)
 
     ast = parser.parse()
+
+    if ast.got_errors:
+        exit(-1)
 
     print('AST:')
     print('------------------------------')

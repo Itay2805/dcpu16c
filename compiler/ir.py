@@ -235,6 +235,8 @@ class IRRet(IRInst):
         self.p0 = p0
 
     def regs(self):
+        if self.p0 is None:
+            return []
         return [self.p0]
 
     def num_write_regs(self):
@@ -244,7 +246,10 @@ class IRRet(IRInst):
         return True
 
     def __str__(self):
-        return f'RET R{self.p0}'
+        if self.p0 is not None:
+            return f'RET R{self.p0}'
+        else:
+            return f'RET'
 
 
 class IRContext:
@@ -419,7 +424,7 @@ class IRCompiler:
 
     def _compile_nop(self, expr: ExprNop, ctx: IRContext):
         ctx.put(IRNop())
-        return ctx.make()
+        return None
 
     def _compile_ident(self, expr: ExprIdent, ctx: IRContext):
         if isinstance(expr.ident, FunctionIdentifier):
