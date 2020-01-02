@@ -115,11 +115,15 @@ class Parser(Tokenizer):
                     new_exprs.append(e)
                     break
 
-                elif isinstance(e, ExprLoop):
-                    # Break on loops that never exit
-                    if isinstance(e.cond, ExprNumber) and e.cond.value != 0:
-                        new_exprs.append(e.body)
-                        break
+                # elif isinstance(e, ExprLoop):
+                #
+                #     # Break on loops that never exit
+                #     # if isinstance(e.cond, ExprNumber) and e.cond.value != 0:
+                #     #     new_exprs.append(e.body)
+                #     #     break
+                #     #
+                #     # else:
+                #     new_exprs.append(e)
 
                 # Ignore nops
                 elif isinstance(e, ExprNop):

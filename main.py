@@ -5,8 +5,8 @@ import dumper
 if __name__ == '__main__':
     parser = Parser("""
 int main(int c) {
-    if(c || 0) {
-        return 123;
+    while(c) {
+        c -= 1;
     }
 }
 """)

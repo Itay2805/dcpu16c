@@ -394,6 +394,7 @@ class IRCompiler:
             ExprCopy: self._compile_copy,
             ExprAddrof: self._compile_addrof,
             ExprCall: self._compile_call,
+            ExprLoop: self._compile_loop,
         }
 
         self.optimizations = [
@@ -550,6 +551,35 @@ class IRCompiler:
         res = ctx.make()
         ctx.put(IRFCall(res, self._compile_expr(expr.func, ctx), args))
         return res
+
+    def _compile_loop(self, expr: ExprLoop, ctx: IRContext):
+        # the start and end of the loop
+        start = IRNop()
+        body = IRNop()
+        end = IRNop()
+
+        # Put the start and the expression for the check
+        ctx.put(start)
+        cond = self._compile_expr(expr.cond, ctx)
+
+        # Compare it, if none-zero then go to body, otherwise go to end
+        # add this right after the condition thingy
+        compare = IRIfnz(cond, body)
+        compare.next = end
+        ctx.put(compare)
+
+        # now we can compile the body, with the start being the body obviously
+        ctx.last_ir = body
+        self._compile_expr(expr.body, ctx)
+
+        # After the last one jump to start
+        ctx.last_ir.next = start
+
+        # make sure it ends with the last ir
+        ctx.last_ir = end
+
+        # no return for loops
+        return None
 
     ####################################################################################################################
     # Top level compilation methods
