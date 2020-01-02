@@ -4,10 +4,8 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""
-int main(int c) {
-    while(c) {
-        c -= 1;
-    }
+int inc(int a) {
+    return a + 1;
 }
 """)
 

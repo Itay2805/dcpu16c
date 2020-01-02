@@ -215,6 +215,11 @@ class Parser(Tokenizer):
             if isinstance(expr.expr, ExprAddrof):
                 return expr.expr.expr
 
+        elif isinstance(expr, ExprAddrof):
+            expr.expr = self._constant_fold(expr.expr, False)
+            if isinstance(expr.expr, ExprDeref):
+                return expr.expr.expr
+
         elif isinstance(expr, ExprCopy):
             expr.source = self._constant_fold(expr.source, False)
             expr.destination = self._constant_fold(expr.destination, False)
@@ -345,6 +350,9 @@ class Parser(Tokenizer):
         if not valid:
             self.report_error(f'invalid operands to binary {op} (have `{t1}` and `{t2}`)', pos)
 
+    def _is_lvalue(self, e: Expr):
+        return isinstance(e, ExprIdent) or isinstance(e, ExprDeref)
+
     ####################################################################################################################
     # Error reporting
     ####################################################################################################################
@@ -430,9 +438,9 @@ class Parser(Tokenizer):
                 op = self.token.value[0]
                 self.next_token()
 
-                # if not e.is_lvalue():
-                #     self.token.pos = pos
-                #     self.report_error('lvalue required as increment operand')
+                if not self._is_lvalue(x):
+                    s = 'increment' if op == '+' else 'decrement'
+                    self.report_error(f'lvalue required as {s} operand', pos)
 
                 self._check_binary_op(op, pos, x, ExprNumber(1))
 
@@ -486,42 +494,42 @@ class Parser(Tokenizer):
         # Address-of
         if self.match_token('&'):
             e = self._parse_prefix()
-            # if not e.is_lvalue():
-            #     self.token.pos = pos
-            #     self.report_error('lvalue required as unary `&` operand')
+            if not self._is_lvalue(e):
+                self.token.pos = pos
+                self.report_error('lvalue required as unary `&` operand')
             return ExprAddrof(e, self._combine_pos(pos, e.pos))
 
         elif self.match_token('*'):
             e = self._parse_prefix()
-            # typ = e.resolve_type(self.current_function)
-            # pos = self._expand_pos(pos, e.pos)
-            #
-            # if not isinstance(typ, CPointer):
-            #     self.token.pos = pos
-            #     self.report_error(f'invalid type argument of unary `*` (have `{typ}`)')
-            #
-            # if isinstance(typ.type, CVoid):
-            #     self.token.pos = pos
-            #     self.report_error('dereferencing `void *` pointer')
-            #
-            return ExprDeref(e, self._combine_pos(pos, e.pos))
+            typ = e.resolve_type(self)
+            pos = self._combine_pos(pos, e.pos)
+
+            if not isinstance(typ, CPointer):
+                self.report_error(f'invalid type argument of unary `*` (have `{typ}`)', pos)
+
+            if isinstance(typ.type, CVoid):
+                self.report_error('dereferencing `void *` pointer', pos)
+
+            # Deref of function ptr returns a function ptr
+            if isinstance(typ.type, CFunction):
+                return e
+            else:
+                return ExprDeref(e, self._combine_pos(pos, e.pos))
 
         elif self.match_token('~'):
             e = self._parse_prefix()
-            # typ = e.resolve_type(self.current_function)
-            # pos = self._expand_pos(pos, e.pos)
-            # if not isinstance(typ, CInteger):
-            #     self.token.pos = pos
-            #     self.report_error(f'invalid type argument of unary `~` (have `{typ}`)')
+            typ = e.resolve_type(self)
+            pos = self._combine_pos(pos, e.pos)
+            if not isinstance(typ, CInteger):
+                self.report_error(f'invalid type argument of unary `~` (have `{typ}`)', pos)
             return ExprBinary(e, '^', ExprNumber(0xFFFF))
 
         elif self.match_token('!'):
             e = self._parse_prefix()
-            # typ = e.resolve_type(self.current_function)
-            # pos = self._expand_pos(pos, e.pos)
-            # if not isinstance(typ, CInteger):
-            #     self.token.pos = pos
-            #     self.report_error(f'invalid type argument of unary `!` (have `{typ}`)')
+            typ = e.resolve_type(self)
+            pos = self._combine_pos(pos, e.pos)
+            if not isinstance(typ, CInteger):
+                self.report_error(f'invalid type argument of unary `!` (have `{typ}`)', pos)
             return ExprBinary(e, '==', ExprNumber(0), self._combine_pos(pos, e.pos))
 
         elif self.is_token('++') or self.is_token('--'):
@@ -529,9 +537,9 @@ class Parser(Tokenizer):
             self.next_token()
             e = self._parse_prefix()
 
-            # if not e.is_lvalue():
-            #     self.token.pos = pos
-            #     self.report_error('lvalue required as decrement operand')
+            if not self._is_lvalue(e):
+                s = 'decrement' if op == '-' else 'increment'
+                self.report_error(f'lvalue required as {s} operand', pos)
 
             if e.is_pure(self):
                 return ExprCopy(ExprBinary(e, op, ExprNumber(1)), e)
@@ -542,9 +550,9 @@ class Parser(Tokenizer):
                     .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1)), ExprDeref(temp)))
 
         # Size-of
-        # elif self.match_keyword('sizeof'):
-        #     xtype = self._parse_expr().resolve_type(self.current_function).sizeof()
-        #     return ExprNumber(xtype, self._expand_pos(pos, self.token.pos))
+        elif self.match_keyword('sizeof'):
+            xtype = self._parse_expr().resolve_type(self).sizeof()
+            return ExprNumber(xtype, self._combine_pos(pos, self.token.pos))
 
         # Type cast
         # self.push()
@@ -706,10 +714,10 @@ class Parser(Tokenizer):
                 self.is_token('/=') or self.is_token('%=') or self.is_token('>>=') or self.is_token('<<=') or \
                 self.is_token('&=') or self.is_token('^=') or self.is_token('|='):
             op = self.token.value
+            pos = self.token.pos
 
-            # t1 = e1.resolve_type(self.current_function)
-            # if not e1.is_lvalue() or isinstance(t1, FunctionDeclaration):
-            #     self.report_error('lvalue required as left operand of assignment')
+            if not self._is_lvalue(x):
+                self.report_error('lvalue required as left operand of assignment', pos)
 
             self.next_token()
             y = self._parse_assignment()

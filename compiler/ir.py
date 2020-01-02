@@ -670,6 +670,9 @@ class IRCompiler:
             # - IFNZ with both branches being the same
             # - Any modify instruction where the target is never read after
             #   and has no side effects
+            counter = 0
+            counter_max = 1
+            seen = p
             while p is not None:
                 reads_after_write = False
                 for i, _ in p.write_regs():
@@ -683,8 +686,15 @@ class IRCompiler:
                         (p.has_side_effects() or reads_after_write):
                     return p
 
-                # We changed something
-                changed = True
+                if p.next == seen:
+                    return p
+
+                counter += 1
+                if counter == counter_max:
+                    seen = p
+                    counter = 0
+                    counter_max <<= 1
+
                 p = p.next
 
         # reduce nops from functions entries
