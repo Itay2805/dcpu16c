@@ -4,6 +4,8 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""
+void inc(int a);
+    
 int inc(int a) {
     return a + 1;
 }

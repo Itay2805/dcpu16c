@@ -260,20 +260,20 @@ class Parser(Tokenizer):
             s.append(str(f))
         return '\n'.join(s)
 
-    def _define(self, name: str, ident: Identifier) -> Expr:
+    def _define(self, name: str, ident: Identifier) -> ExprIdent:
         if self._use(name) is not None:
             return None
         self._scopes[-1][name] = ident
         return ExprIdent(ident)
 
-    def _def_var(self, name, typ) -> Expr:
+    def _def_var(self, name, typ) -> ExprIdent:
         ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
         if ret is None:
             return None
         self.func.vars.append(typ)
         return ret
 
-    def _def_param(self, name, typ) -> Expr:
+    def _def_param(self, name, typ) -> ExprIdent:
         ret = self._define(name, ParameterIdentifier(name, self.func.num_params))
         if ret is None:
             return None
@@ -281,16 +281,16 @@ class Parser(Tokenizer):
         self.func.num_params += 1
         return ret
 
-    def _def_fun(self, name) -> Expr:
+    def _def_fun(self, name) -> ExprIdent:
         ret = self._define(name, FunctionIdentifier(name, len(self.func_list)))
         return ret
 
-    def _temp(self, typ) -> Expr:
+    def _temp(self, typ) -> ExprIdent:
         ret = self._def_var(f'$TEMP{self._temp_counter}', typ)
         self._temp_counter += 1
         return ret
 
-    def _use(self, name: str) -> Expr:
+    def _use(self, name: str) -> ExprIdent:
         for scope in reversed(self._scopes):
             if name in scope:
                 return ExprIdent(scope[name])
@@ -300,6 +300,7 @@ class Parser(Tokenizer):
         self.func = Function(name)
         self.func.type.ret_type = typ
         self.func.code = ExprComma()
+        self.func.prototype = False
         self.func_list.append(self.func)
 
     def _push_scope(self):
@@ -363,11 +364,11 @@ class Parser(Tokenizer):
     RED = '\033[31m'
     YELLOW = '\033[33m'
 
-    def report(self, typ: str, col: str, msg: str, pos=None):
+    def report(self, typ: str, col: str, msg: str, pos=None, inside_function=True):
         if pos is None:
             pos = self.token.pos
 
-        if self.func is not None:
+        if inside_function and self.func is not None:
             print(f'{Parser.BOLD}{self.filename}:{Parser.RESET} In function `{Parser.BOLD}{self.func.name}{Parser.RESET}`')
 
         print(f'{Parser.BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{Parser.RESET} {col}{Parser.BOLD}{typ}:{Parser.RESET} {msg}')
@@ -386,15 +387,15 @@ class Parser(Tokenizer):
         print(c + Parser.BOLD + col + '^' + '~' * (pos.end_column - pos.start_column - 1) + Parser.RESET)
         print()
 
-    def report_error(self, msg: str, pos=None):
-        self.report('error', Parser.RED, msg, pos)
+    def report_error(self, msg: str, pos=None, inside_function=True):
+        self.report('error', Parser.RED, msg, pos, inside_function)
         self.got_errors = True
 
-    def report_warn(self, msg: str, pos=None):
-        self.report('warning', Parser.YELLOW, msg, pos)
+    def report_warn(self, msg: str, pos=None, inside_function=True):
+        self.report('warning', Parser.YELLOW, msg, pos, inside_function)
 
-    def report_fatal_error(self, msg: str, pos=None):
-        self.report('error', Parser.RED, msg, pos)
+    def report_fatal_error(self, msg: str, pos=None, inside_function=True):
+        self.report('error', Parser.RED, msg, pos, inside_function)
         exit(-1)
 
     # TODO: warning
@@ -884,22 +885,51 @@ class Parser(Tokenizer):
 
         return typ
 
-    def _parse_func(self):
+    def _parse_func(self, func_name_pos: CodePosition, already_exists: bool):
         # Get the params
         self.expect_token('(')
 
-        def parse_arg():
-            typ = self._parse_type(True)
+        i = 0
+        got_error = False
 
+        def parse_arg():
+            nonlocal i
+            nonlocal got_error
+
+            typ = self._parse_type(True)
             name, pos = self.expect_ident()
 
-            # TODO: check complete
-            if isinstance(typ, CVoid):
-                self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos)
+            if got_error:
+                return
 
-            if self._def_param(name, typ) is None:
-                self.token.pos = pos
-                self.report_fatal_error(f'redefinition of `{name}`')
+            # Only do these stuff if the function does not exists already
+            if not already_exists:
+                # TODO: check complete
+                if isinstance(typ, CVoid):
+                    self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos, False)
+
+                if self._def_param(name, typ) is None:
+                    self.report_error(f'redefinition of `{name}`', pos, False)
+            else:
+                if not got_error:
+                    # TODO: For now I do a fatal error because otherwise it will use the types of the prototype
+                    #       which means the types will not be correct for this function anyways making a bunch
+                    #       of useless errors...
+                    if len(self.func.type.arg_types) <= i:
+                        self.report_fatal_error(f'number of arguments doesnt match prototype', func_name_pos, False)
+                        got_error = True
+
+                    elif typ != self.func.type.arg_types[i]:
+                        self.report_fatal_error(f'conflicting types for `{self.func.name}`', func_name_pos, False)
+                        got_error = True
+
+                # Add the correct symbol to the scope
+                if self._define(name, ParameterIdentifier(name, i)) is None:
+                    self.report_error(f'redefinition of `{name}`', pos, False)
+
+            i += 1
+
+        self._push_scope()
 
         if not self.match_token(')'):
             parse_arg()
@@ -907,52 +937,64 @@ class Parser(Tokenizer):
                 parse_arg()
             self.expect_token(')')
 
-        # Parse the body
-        self.expect_token('{')
+        # Has a body
+        if self.match_token('{'):
 
-        # Parse all the variable declarations
-        self.push()
-        typ = self._parse_type(False)
-        while typ is not None:
-            self.discard()
+            # If the function is not a prototype complain on it already existing
+            # also check the already_exists since the function is not a prototype by default
+            if already_exists and not self.func.prototype:
+                self.report_fatal_error(f'redefinition of `{self.func.name}`', func_name_pos, False)
 
-            # Helpers to parse a single decl
-            def parse_var_decl():
-                name, pos = self.expect_ident()
-                expr = None
-                if self.match_token('='):
-                    expr = self._parse_assignment()
+            self.func.prototype = False
 
-                new_var = self._def_var(name, typ)
-                if new_var is None:
-                    self.token.pos = pos
-                    self.report_fatal_error(f'redefinition of `{name}`')
-
-                if expr is not None:
-                    self._check_assignment(new_var, expr)
-                    self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
-
-            # Parse all the decls
-            parse_var_decl()
-            while not self.match_token(';'):
-                self.expect_token(',')
-                parse_var_decl()
-
-            # Next
+            # Parse all the variable declarations
             self.push()
             typ = self._parse_type(False)
-        self.pop()
+            while typ is not None:
+                self.discard()
 
-        # Continue and parse the block
-        self._push_scope()
-        self.func.code.add(self._parse_stmt_block())
-        self._pop_scope()
+                # Helpers to parse a single decl
+                def parse_var_decl():
+                    name, pos = self.expect_ident()
+                    expr = None
+                    if self.match_token('='):
+                        expr = self._parse_assignment()
 
-        # Add an implicit `return 0;`
-        if isinstance(self.func.type.ret_type, CVoid):
-            self.func.code.add(ExprReturn(ExprNop()))
+                    new_var = self._def_var(name, typ)
+                    if new_var is None:
+                        self.token.pos = pos
+                        self.report_fatal_error(f'redefinition of `{name}`')
+
+                    if expr is not None:
+                        self._check_assignment(new_var, expr)
+                        self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
+
+                # Parse all the decls
+                parse_var_decl()
+                while not self.match_token(';'):
+                    self.expect_token(',')
+                    parse_var_decl()
+
+                # Next
+                self.push()
+                typ = self._parse_type(False)
+            self.pop()
+
+            # Continue and parse the block
+            self._push_scope()
+            self.func.code.add(self._parse_stmt_block())
+            self._pop_scope()
+
+            # Add an implicit `return 0;`
+            if isinstance(self.func.type.ret_type, CVoid):
+                self.func.code.add(ExprReturn(ExprNop()))
+            else:
+                self.func.code.add(ExprReturn(ExprNumber(0)))
         else:
-            self.func.code.add(ExprReturn(ExprNumber(0)))
+            # Just a prototype
+            self.func.prototype = True
+
+        self._pop_scope()
 
     def parse(self):
         self._push_scope()
@@ -1012,9 +1054,15 @@ class Parser(Tokenizer):
 
                 # Check if a function
                 if self.is_token('('):
-                    self._def_fun(name)
-                    self._add_function(name, typ)
-                    self._parse_func()
+                    e = self._def_fun(name)
+                    if e is not None:
+                        self._add_function(name, typ)
+                        self.func = self.func_list[e.ident.index]
+                    else:
+                        if self.func.type.ret_type != typ:
+                            self.report_fatal_error(f'conflicting types for `{self.func.name}`', name_pos, False)
+
+                    self._parse_func(name_pos, e is None)
 
                 # Assume global variable instead
                 else:

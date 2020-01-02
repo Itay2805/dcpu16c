@@ -323,6 +323,7 @@ class Function:
         self.num_params = 0
         self.vars = []  # type: List[Expr]
 
+        self.prototype = False
         self.type = CFunction()
 
         self.pure = False
