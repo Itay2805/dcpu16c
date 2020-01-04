@@ -207,7 +207,7 @@ class Parser(Tokenizer):
             else:
                 # The numbers are know and we can calculate them
                 if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
-                    return ExprNumber(eval(f'{expr.left} {expr.op} {expr.right}'))
+                    return ExprNumber(int(eval(f'{expr.left} {expr.op} {expr.right}')))
 
         elif isinstance(expr, ExprDeref):
             expr.expr = self._constant_fold(expr.expr, False)
@@ -340,7 +340,7 @@ class Parser(Tokenizer):
 
         valid = False
 
-        if op in ['+', '-', '==', '||', '&&']:
+        if op in ['+', '-', '==', '!=', '||', '&&']:
             valid = (isinstance(t1, CPointer) or isinstance(t1, CInteger)) and \
                    (isinstance(t2, CPointer) or isinstance(t2, CInteger))
         elif op in ['<<', '>>', '*', '/', '%', '&', '|', '^']:
@@ -349,7 +349,7 @@ class Parser(Tokenizer):
             assert False
 
         if not valid:
-            self.report_error(f'invalid operands to binary {op} (have `{t1}` and `{t2}`)', pos)
+            self.report_error(f'invalid operands to binary `{op}` (have `{t1}` and `{t2}`)', pos)
 
     def _is_lvalue(self, e: Expr):
         return isinstance(e, ExprIdent) or isinstance(e, ExprDeref)
@@ -465,7 +465,7 @@ class Parser(Tokenizer):
                 self.expect_token(']')
 
                 arr_type = x.resolve_type(self)
-                if not isinstance(arr_type, CPointer):
+                if not isinstance(arr_type, CPointer) and not isinstance(arr_type, CArray):
                     self.report_fatal_error('subscripted value is neither array nor pointer', pos)
 
                 if not isinstance(sub.resolve_type(self), CInteger):
@@ -552,7 +552,7 @@ class Parser(Tokenizer):
 
         # Size-of
         elif self.match_keyword('sizeof'):
-            xtype = self._parse_expr().resolve_type(self).sizeof()
+            xtype = self._parse_prefix().resolve_type(self).sizeof()
             return ExprNumber(xtype, self._combine_pos(pos, self.token.pos))
 
         # Type cast
@@ -880,10 +880,41 @@ class Parser(Tokenizer):
             else:
                 return None
 
+        return typ
+
+    def _parse_type_name(self):
+        typ = self._parse_type(False)
+        if typ is None:
+            return None, None, None
+
+        # Parse the prefixes
         while self.match_token('*'):
             typ = CPointer(typ)
 
-        return typ
+        name = None
+        name_pos = None
+        if self.is_token(IdentToken):
+            name, name_pos = self.expect_ident()
+
+        array_lens = []
+
+        # Parse the postfixes
+        while self.match_token('['):
+            if self.is_token(IntToken):
+                val = self.token.value
+                self.next_token()
+                array_lens.append(val)
+            else:
+                # incomplete array
+                array_lens.append(None)
+            self.expect_token(']')
+
+        for i in reversed(array_lens):
+            if not typ.is_complete():
+                self.report_fatal_error(f'array type has incomplete element type `{typ}`', name_pos)
+            typ = CArray(typ, i)
+
+        return typ, name, name_pos
 
     def _parse_func(self, func_name_pos: CodePosition, already_exists: bool):
         # Get the params
@@ -905,7 +936,7 @@ class Parser(Tokenizer):
             # Only do these stuff if the function does not exists already
             if not already_exists:
                 # TODO: check complete
-                if isinstance(typ, CVoid):
+                if not typ.is_complete():
                     self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos, False)
 
                 if self._def_param(name, typ) is None:
@@ -949,35 +980,39 @@ class Parser(Tokenizer):
 
             # Parse all the variable declarations
             self.push()
-            typ = self._parse_type(False)
+            typ, name, name_pos = self._parse_type_name()
             while typ is not None:
                 self.discard()
 
+                if isinstance(typ, CArray) and typ.len is None:
+                    self.report_error(f'array size missing in `{name}`', name_pos)
+                elif not typ.is_complete():
+                    self.report_error(f'storage size of `{name}` isnt known', name_pos)
+
                 # Helpers to parse a single decl
                 def parse_var_decl():
-                    name, pos = self.expect_ident()
                     expr = None
                     if self.match_token('='):
                         expr = self._parse_assignment()
 
                     new_var = self._def_var(name, typ)
                     if new_var is None:
-                        self.token.pos = pos
-                        self.report_fatal_error(f'redefinition of `{name}`')
+                        self.report_fatal_error(f'redefinition of `{name}`', name_pos)
 
                     if expr is not None:
                         self._check_assignment(new_var, expr)
-                        self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(pos, expr.pos)))
+                        self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(name_pos, expr.pos)))
 
                 # Parse all the decls
                 parse_var_decl()
                 while not self.match_token(';'):
                     self.expect_token(',')
+                    name, name_pos = self.expect_ident()
                     parse_var_decl()
 
                 # Next
                 self.push()
-                typ = self._parse_type(False)
+                typ, name, name_pos = self._parse_type_name()
             self.pop()
 
             # Continue and parse the block

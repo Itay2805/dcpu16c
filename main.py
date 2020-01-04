@@ -3,11 +3,15 @@ from compiler.ir import IRCompiler
 import dumper
 
 if __name__ == '__main__':
-    parser = Parser("""
-void inc(int a);
+    parser = Parser("""    
+int test() {
+    int another[10];
+    int len = (sizeof(another) / sizeof(another[0]));
+    int i = 0;
     
-int inc(int a) {
-    return a + 1;
+    while(i != len) {
+        another[i++] = 0;
+    }
 }
 """)
 

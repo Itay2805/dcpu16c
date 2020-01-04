@@ -6,6 +6,9 @@ class CType:
     def __ne__(self, other):
         return not (self == other)
 
+    def is_complete(self):
+        raise NotImplementedError
+
     def sizeof(self):
         raise NotImplementedError
 
@@ -36,6 +39,9 @@ class CInteger(CType):
             else:
                 assert False
 
+    def is_complete(self):
+        return True
+
 
 class CPointer(CType):
 
@@ -54,6 +60,9 @@ class CPointer(CType):
         # TODO: show the pointer type properly for functions
         return str(self.type) + '*'
 
+    def is_complete(self):
+        return True
+
 
 class CVoid(CType):
 
@@ -69,6 +78,9 @@ class CVoid(CType):
     def __str__(self):
         return 'void'
 
+    def is_complete(self):
+        return False
+
 
 class CFunction(CType):
 
@@ -83,3 +95,25 @@ class CFunction(CType):
         args = ', '.join(map(str, self.arg_types))
         return f'{self.ret_type} (*)({args})'
 
+    def is_complete(self):
+        return True
+
+
+class CArray(CType):
+
+    def __init__(self, typ: CType, len: int or None):
+        self.type = typ
+        self.len = len
+
+    def sizeof(self):
+        assert self.is_complete()
+        return self.len * self.type.sizeof()
+
+    def is_complete(self):
+        return self.len is not None and self.type.is_complete()
+
+    def __str__(self):
+        if self.len is None:
+            return f'{self.type}[]'
+        else:
+            return f'{self.type}[{self.len}]'

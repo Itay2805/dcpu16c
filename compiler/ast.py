@@ -196,7 +196,7 @@ class ExprDeref(Expr):
 
     def resolve_type(self, ast):
         t = self.expr.resolve_type(ast)
-        assert isinstance(t, CPointer)
+        assert isinstance(t, CPointer) or isinstance(t, CArray)
         return t.type
 
     def is_pure(self, parser):
@@ -321,7 +321,7 @@ class Function:
         self.name = name
         self.code = None
         self.num_params = 0
-        self.vars = []  # type: List[Expr]
+        self.vars = []  # type: List[CType]
 
         self.prototype = False
         self.type = CFunction()

@@ -45,6 +45,28 @@ class IRNop(IRInst):
         return 'NOP'
 
 
+class IRAlloca(IRInst):
+    """
+    p0 = alloca(value)
+    """
+
+    def __init__(self, p0: int, value: int):
+        self.p0 = p0
+        self.value = value
+
+    def regs(self):
+        return [self.p0]
+
+    def num_write_regs(self):
+        return 1
+
+    def __str__(self):
+        return f'ALLOCA R{self.p0}, {self.value}'
+
+    def has_side_effects(self):
+        return False
+
+
 class IRInit(IRInst):
     """
     p0 = &ident + value
@@ -591,7 +613,18 @@ class IRCompiler:
 
     def _compile_function(self, func: Function):
         self.function_parameters[func.name] = func.num_params
+
         ctx = IRContext(func.num_params, self.entry_points[func.name])
+
+        # Allocate whatever needed variables
+        for i, var in enumerate(func.vars):
+            # Stack allocated array
+            if isinstance(var, CArray):
+                reg = ctx.make()
+                ctx.var_to_reg[i] = reg
+                ctx.put(IRAlloca(reg, var.sizeof()))
+
+        # Compile the code
         self._compile_expr(func.code, ctx)
 
     def compile(self):
