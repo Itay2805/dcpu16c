@@ -4,14 +4,8 @@ import dumper
 
 if __name__ == '__main__':
     parser = Parser("""    
-int test() {
-    int another[10];
-    int len = (sizeof(another) / sizeof(another[0]));
-    int i = 0;
-    
-    while(i != len) {
-        another[i++] = 0;
-    }
+int eq(int a, int b, int yes, int no) {
+    return a == b ? yes : no;
 }
 """)
 

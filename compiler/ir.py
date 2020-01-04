@@ -277,11 +277,31 @@ class IRRet(IRInst):
 class IRContext:
 
     def __init__(self, init_reg: int, ir: IRInst):
+        self.num_params = init_reg
         self.reg_counter = init_reg
         self.last_ir = ir  # type: IRInst
         self.var_to_reg = {}  # type: Dict[int, int]
+        self.free_regs = []
+
+    def is_var(self, reg):
+        # Params
+        if reg < self.num_params:
+            return True
+
+        # Variables
+        for var in self.var_to_reg:
+            if reg == self.var_to_reg[var]:
+                return True
+
+        return False
+
+    def free(self, reg):
+        if not self.is_var(reg):
+            self.free_regs.append(reg)
 
     def make(self):
+        if len(self.free_regs) != 0:
+            return self.free_regs.pop()
         r = self.reg_counter
         self.reg_counter += 1
         return r
@@ -522,14 +542,21 @@ class IRCompiler:
             p1 = self._compile_expr(expr.left, ctx)
             p2 = self._compile_expr(expr.right, ctx)
 
+            # TODO: Reuse one of the inputs as output
             res = ctx.make()
             ctx.put(IRMath(res, p1, p2, op_to_ir[expr.op]))
+
+            ctx.free(p1)
+            ctx.free(p2)
+
             return res
 
     def _compile_comma(self, expr: ExprComma, ctx: IRContext):
         last = None
         for e in expr.exprs:
             last = self._compile_expr(e, ctx)
+            if last is not None:
+                ctx.free(last)
         return last
 
     def _compile_copy(self, expr: ExprCopy, ctx: IRContext):
@@ -570,8 +597,18 @@ class IRCompiler:
         args = []
         for a in expr.args:
             args.append(self._compile_expr(a, ctx))
+
+        func = self._compile_expr(expr.func, ctx)
+
+        # TODO: reuse one of the params as output
         res = ctx.make()
-        ctx.put(IRFCall(res, self._compile_expr(expr.func, ctx), args))
+        ctx.put(IRFCall(res, func, args))
+
+        # Free regs
+        ctx.free(func)
+        for arg in args:
+            ctx.free(arg)
+
         return res
 
     def _compile_loop(self, expr: ExprLoop, ctx: IRContext):
