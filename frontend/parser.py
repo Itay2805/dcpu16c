@@ -1047,6 +1047,13 @@ class Parser(Tokenizer):
                 # Now that we know what this is we can parse it normally
                 if func:
                     ret_typ = self._parse_type(True)
+
+                    # Parse the calling convention
+                    callconv = None
+                    if self.is_keyword('__stackcall') or self.is_keyword('__regcall'):
+                        callconv = self.token.value[2:]
+                        self.next_token()
+
                     name, name_pos = self.expect_ident()
 
                     if isinstance(ret_typ, CArray):
@@ -1059,6 +1066,14 @@ class Parser(Tokenizer):
                     else:
                         if self.func.type.ret_type != ret_typ:
                             self.report_fatal_error(f'conflicting types for `{self.func.name}`', name_pos, False)
+
+                    # Handle setting the calling conv
+                    if self.func.calling_conv is None:
+                        if callconv is None:
+                            callconv = 'stackcall'
+                        self.func.calling_conv = callconv
+                    elif callconv is not None:
+                        assert callconv == self.func.calling_conv
 
                     self._parse_func(name_pos, e is None)
 

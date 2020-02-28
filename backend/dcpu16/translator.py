@@ -59,16 +59,34 @@ class Dcpu16Translator:
         elif isinstance(expr, ExprCast):
             return self._can_resolve_to_operand_without_deref(expr.expr)
 
-        elif isinstance(expr, ExprAddrof):
-            return True
-
         elif isinstance(expr, ExprBinary):
             if self._can_resolve_to_operand_without_deref(expr.left) and self._can_resolve_to_operand_without_deref(expr.right):
-                return True
+                left = self._translate_expr(expr.left, None)
+                right = self._translate_expr(expr.right, None)
+                if isinstance(left, Offset) and isinstance(right, int) or \
+                    isinstance(right, Offset) and isinstance(left, int):
+                    return True
+                else:
+                    return False
+
+        elif isinstance(expr, ExprAddrof):
+            return True
 
     def _can_resolve_to_operand(self, expr):
         if self._can_resolve_to_operand_without_deref(expr):
             return True
+
+        elif isinstance(expr, ExprBinary):
+            if self._can_resolve_to_operand_without_deref(expr.left) and self._can_resolve_to_operand_without_deref(expr.right):
+                left = self._translate_expr(expr.left, None)
+                right = self._translate_expr(expr.right, None)
+                if isinstance(left, Offset) and isinstance(right, int) or \
+                    isinstance(right, Offset) and isinstance(left, int) or \
+                    isinstance(left, Reg) and isinstance(right, int) or \
+                    isinstance(right, Reg) and isinstance(left, int):
+                    return True
+                else:
+                    return False
 
         elif isinstance(expr, ExprCast):
             return self._can_resolve_to_operand(expr.expr)
@@ -408,7 +426,7 @@ class Dcpu16Translator:
             else:
                 assert False, f'`{expr.destination}` ({type(expr.destination)})'
 
-            if self._can_resolve_to_operand(expr.source):
+            if self._can_resolve_to_operand_without_deref(expr.source):
                 self._asm.emit_set(dest_op, self._translate_expr(expr.source, None))
             else:
                 self._translate_expr(expr.source, dest_op)
