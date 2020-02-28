@@ -57,15 +57,15 @@ As you can see the assembly is actually quite nicely optimized, You can also use
 integer variables to tell the compiler to try and use registers for them, if you do that correctly it can actually
 generate some really nicely optimized code :)
 
-the way to get the best performance is to have assembly functions as `regcall` but to not use it for c functions since 
-the code gen for it is horrible right now.
-
 ## ABI
 ### Calling convention
 The compiler is compliant to the [0x10c Standards Committee ABI](https://github.com/0x10cStandardsCommittee/0x10c-Standards/blob/master/ABI/ABI%20draft%202.txt) 
 (Supporting both stackcall and regcall). We do use the function Prologue and Epilogue and shown in the [first draft](https://github.com/0x10cStandardsCommittee/0x10c-Standards/blob/master/ABI/Draft_ABI_1.txt#L49-L70), 
 this does not affect calling functions which do not implement that because it is only related to code generation inside
 the current function.
+
+To specify which calling convention to use simply add `__regcall` or `__stackcall` before the function name, the default
+calling convention is `__stackcall`.
 
 ## Working
 * typedefs 

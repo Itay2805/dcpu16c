@@ -56,18 +56,18 @@ class Dcpu16Translator:
             else:
                 return False
 
-        elif isinstance(expr, ExprCast):
-            return self._can_resolve_to_operand_without_deref(expr.expr)
-
         elif isinstance(expr, ExprBinary):
             if self._can_resolve_to_operand_without_deref(expr.left) and self._can_resolve_to_operand_without_deref(expr.right):
                 left = self._translate_expr(expr.left, None)
                 right = self._translate_expr(expr.right, None)
                 if isinstance(left, Offset) and isinstance(right, int) or \
-                    isinstance(right, Offset) and isinstance(left, int):
+                        isinstance(right, Offset) and isinstance(left, int):
                     return True
                 else:
                     return False
+
+        elif isinstance(expr, ExprCast):
+            return self._can_resolve_to_operand_without_deref(expr.expr)
 
         elif isinstance(expr, ExprAddrof):
             return True
@@ -81,9 +81,9 @@ class Dcpu16Translator:
                 left = self._translate_expr(expr.left, None)
                 right = self._translate_expr(expr.right, None)
                 if isinstance(left, Offset) and isinstance(right, int) or \
-                    isinstance(right, Offset) and isinstance(left, int) or \
-                    isinstance(left, Reg) and isinstance(right, int) or \
-                    isinstance(right, Reg) and isinstance(left, int):
+                        isinstance(right, Offset) and isinstance(left, int) or \
+                        isinstance(left, Reg) and isinstance(right, int) and expr.op in '-+' or \
+                        isinstance(right, Reg) and isinstance(left, int) and expr.op in '-+':
                     return True
                 else:
                     return False
@@ -293,9 +293,9 @@ class Dcpu16Translator:
                 elif isinstance(right, Offset) and isinstance(left, int):
                     return Offset(right.a, eval(f'{right.offset} {expr.op} {left}'))
                 elif isinstance(left, Reg) and isinstance(right, int):
-                    return Offset(left, right)
+                    return Offset(left, right if expr.op == '+' else -right)
                 elif isinstance(right, Reg) and isinstance(left, int):
-                    return Offset(right, left)
+                    return Offset(right, left if expr.op == '+' else -left)
                 else:
                     assert False, f'`{left}` and `{right}`'
 
@@ -504,6 +504,3 @@ class Dcpu16Translator:
             self._return_pos.append(self._asm.get_pos())
             for i in range(7):
                 self._asm.put_instruction(';; return stub')
-
-
-
