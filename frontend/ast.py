@@ -1,13 +1,9 @@
-from typing import *
-from compiler.tokenizer import CodePosition
-from compiler.typing import *
+from .types import *
 
 
 ########################################################################################################################
 # Identifier stuff
 ########################################################################################################################
-
-# TODO: just have a type instead of different thingies
 
 class Identifier:
 
@@ -41,10 +37,10 @@ class VariableIdentifier(Identifier):
 class Expr:
 
     def is_pure(self, parser):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def resolve_type(self, ast) -> CType:
-        assert False
+        raise NotImplementedError()
 
     def __ne__(self, other):
         return not (self == other)
@@ -71,6 +67,9 @@ class ExprString(Expr):
         self.pos = pos
         self.value = value
 
+    def resolve_type(self, ast) -> CType:
+        return CArray(CInteger(16, True), len(self.value))
+
     def is_pure(self, parser):
         return True
 
@@ -85,12 +84,13 @@ class ExprString(Expr):
 
 class ExprNumber(Expr):
 
-    def __init__(self, value: int, pos=None):
+    def __init__(self, value: int, typ: CInteger=CInteger(16, True), pos=None):
         self.pos = pos
         self.value = value
+        self.typ = typ
 
     def resolve_type(self, ast):
-        return CInteger(16, False)
+        return self.typ
 
     def is_pure(self, parser):
         return True
@@ -114,9 +114,9 @@ class ExprIdent(Expr):
         if isinstance(self.ident, VariableIdentifier):
             return ast.func.vars[self.ident.index]
         elif isinstance(self.ident, FunctionIdentifier):
-            return CPointer(ast.func_list[self.ident.index].type)
+            return ast.func_list[self.ident.index]
         elif isinstance(self.ident, ParameterIdentifier):
-            return ast.func.type.arg_types[self.ident.index]
+            return ast.func.type.param_types[self.ident.index]
         else:
             assert False
 
@@ -142,11 +142,19 @@ class ExprBinary(Expr):
         self.right = right
 
     def resolve_type(self, ast):
+        ltyp = self.left.resolve_type(ast)
+        rtyp = self.right.resolve_type(ast)
+
         if self.op in ['<<', '>>', '+', '-', '*', '/', '%']:
-            # just use the type of the left element
-            # TODO: whats the proper way of doing this?
-            return self.left.resolve_type(ast)
-        elif self.op in ['==', '||', '&&']:
+            # just use the type of the left element unless the right is a pointer
+            # and then use the right
+            if isinstance(rtyp, CPointer):
+                return rtyp
+            else:
+                return ltyp
+        elif self.op in ['==', '||', '&&', '<=', '>=', '<', '>']:
+            # Logical operations always return an int
+            # TODO: Make it return a boolean instead
             return CInteger(16, False)
         else:
             assert False
@@ -156,6 +164,23 @@ class ExprBinary(Expr):
 
     def __str__(self, ident=''):
         return ident + f'({self.left} {self.op} {self.right})'
+
+
+class ExprCast(Expr):
+
+    def __init__(self, expr: Expr, typ: CType, pos=None):
+        self.pos = pos
+        self.expr = expr
+        self.typ = typ
+
+    def resolve_type(self, ast) -> CType:
+        return self.typ
+
+    def is_pure(self, parser):
+        return self.expr.is_pure(parser)
+
+    def __str__(self):
+        return f'(cast {self.expr} {self.typ})'
 
 
 class ExprLoop(Expr):
@@ -174,12 +199,19 @@ class ExprLoop(Expr):
 
 class ExprAddrof(Expr):
 
-    def __init__(self, expr: Expr, pos=None):
+    def __init__(self, expr: ExprIdent, pos=None):
+        assert isinstance(expr, ExprIdent)
         self.pos = pos
         self.expr = expr
+        self.ident = expr.ident
 
     def resolve_type(self, ast):
-        return CPointer(self.expr.resolve_type(ast))
+        typ = self.expr.resolve_type(ast)
+        # &func == func
+        if isinstance(typ, CFunction):
+            return typ
+        else:
+            return CPointer(typ)
 
     def is_pure(self, parser):
         return True
@@ -196,8 +228,12 @@ class ExprDeref(Expr):
 
     def resolve_type(self, ast):
         t = self.expr.resolve_type(ast)
-        assert isinstance(t, CPointer) or isinstance(t, CArray)
-        return t.type
+        # *func == func
+        if isinstance(t, CFunction):
+            return t
+        else:
+            assert isinstance(t, CPointer) or isinstance(t, CArray)
+            return t.type
 
     def is_pure(self, parser):
         # return True
@@ -228,7 +264,7 @@ class ExprCall(Expr):
     def is_pure(self, parser):
         if isinstance(self.func, ExprIdent) and isinstance(self.func.ident, FunctionIdentifier):
             called_function = parser.func_list[self.func.ident.index]
-            return called_function.pure_known and called_function.pure
+            return called_function.pure_known and called_function.pure and len([x for x in self.args if x.is_pure(parser)]) == 0
         return False
 
     def __str__(self, ident=''):
@@ -260,7 +296,6 @@ class ExprCopy(Expr):
 class ExprComma(Expr):
 
     def __init__(self, pos=None):
-        assert pos is None or isinstance(pos, CodePosition)
         self.pos = pos
         self.exprs = []  # type: List[Expr]
 
@@ -268,6 +303,10 @@ class ExprComma(Expr):
         # If a comma expression merge into self
         if isinstance(expr, ExprComma):
             for e in expr.exprs:
+                self.exprs.append(e)
+        # If a list then merge into self
+        elif isinstance(expr, list):
+            for e in expr:
                 self.exprs.append(e)
         else:
             self.exprs.append(expr)
@@ -304,6 +343,9 @@ class ExprReturn(Expr):
         self.pos = pos
         self.expr = expr
 
+    def resolve_type(self, ast) -> CType:
+        return self.expr.resolve_type(ast)
+
     def is_pure(self, parser):
         return False
 
@@ -318,6 +360,7 @@ class ExprReturn(Expr):
 class Function:
 
     def __init__(self, name: str):
+        self.calling_conv = 'stackcall'
         self.name = name
         self.code = None
         self.num_params = 0

@@ -7,10 +7,10 @@ class CType:
         return not (self == other)
 
     def is_complete(self):
-        raise NotImplementedError
+        return NotImplemented
 
     def sizeof(self):
-        raise NotImplementedError
+        return NotImplemented
 
 
 class CInteger(CType):
@@ -25,7 +25,7 @@ class CInteger(CType):
         return False
 
     def sizeof(self):
-        return self.bits // 16
+        return self.bits // 8
 
     def __str__(self):
         if not self.signed:
@@ -49,7 +49,7 @@ class CPointer(CType):
         self.type = typ
 
     def sizeof(self):
-        return 1
+        return 2
 
     def __eq__(self, other):
         if isinstance(other, CPointer):
@@ -89,10 +89,10 @@ class CFunction(CType):
 
     def __init__(self):
         self.ret_type = CVoid()  # type: CType
-        self.arg_types = []  # type: List[CType]
+        self.param_types = []  # type: List[CType]
 
     def __str__(self):
-        args = ', '.join(map(str, self.arg_types))
+        args = ', '.join(map(str, self.param_types))
         return f'{self.ret_type} (*)({args})'
 
     def is_complete(self):
@@ -117,3 +117,45 @@ class CArray(CType):
             return f'{self.type}[]'
         else:
             return f'{self.type}[{self.len}]'
+
+
+class CStruct(CType):
+
+    def __init__(self, name: str, name_pos):
+        self.name = name
+        self.packed = 0
+        self.pos = name_pos
+        self.items = {}  # type: Dict[str, CType]
+
+    def _align(self, base, size):
+        if base % size != 0:
+            base += size - base % size
+        return base
+
+    def offsetof(self, name):
+        offset = 0
+        for item in self.items:
+            if item == name:
+                return offset
+
+            if self.packed:
+                offset += self.items[item].sizeof()
+            else:
+                offset += self._align(offset, self.items[item].sizeof()) + self.items[item].sizeof()
+
+    def sizeof(self):
+        s = 0
+        for name, typ in self.items:
+            s += typ.sizeof()
+        return s
+
+    def is_complete(self):
+        return self.items is not None
+
+    def __str__(self):
+        name = self.name
+        if name is None:
+            name = ''
+        else:
+            name = ' ' + name
+        return f'struct{name}'

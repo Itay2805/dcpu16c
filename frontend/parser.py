@@ -1,269 +1,51 @@
-from compiler.tokenizer import *
-from compiler.typing import *
-from compiler.ast import *
+from .tokenizer import *
+from .ast import *
 
 
 class Parser(Tokenizer):
 
-    def __init__(self, code: str, filename: str = "<unknown>"):
-        super(Parser, self).__init__(code, filename)
-        self.next_token()
+    class Scope:
 
-        self._scopes = []  # type: List[Dict[str, Identifier]]
+        def __init__(self):
+            self.idents = {}  # type: Dict[str, Identifier]
+            self.type_defs = {}  # type: Dict[Tuple[str], CType]
+
+    def __init__(self, stream: str, filename: str = '<unknown>'):
+        super().__init__(stream, filename)
+        self._scopes = []  # type: List[Parser.Scope]
         self.func_list = []  # type: List[Function]
         self.func = None  # type: Function
+
+        # Setup the global scope with all the default types
+        self._push_scope()
+        self._add_typedef(['char'], CInteger(8, True))
+        self._add_typedef(['signed', 'char'], CInteger(8, True))
+        self._add_typedef(['unsigned', 'char'], CInteger(8, False))
+        self._add_typedef(['short'], CInteger(16, True))
+        self._add_typedef(['signed', 'short'], CInteger(16, True))
+        self._add_typedef(['unsigned', 'short'], CInteger(16, False))
+        self._add_typedef(['int'], CInteger(16, True))
+        self._add_typedef(['signed', 'int'], CInteger(16, True))
+        self._add_typedef(['signed'], CInteger(16, True))
+        self._add_typedef(['unsigned', 'int'], CInteger(16, False))
+        self._add_typedef(['unsigned'], CInteger(16, False))
+        self._add_typedef(['long'], CInteger(32, True))
+        self._add_typedef(['signed', 'long'], CInteger(32, True))
+        self._add_typedef(['unsigned', 'long'], CInteger(32, False))
+
         self._temp_counter = 0
 
-        self.got_errors = False
-
-    ####################################################################################################################
-    # AST Level optimizations
-    ####################################################################################################################
-
-    def _find_pure_functions(self):
-        for f in self.func_list:
-            f.pure_known = False
-            f.pure = False
-
-        def check_function(f):
-
-            if f.pure_known:
-                return False
-
-            unknown_functions = [False]
-            side_effects = False
-
-            def check_side_effects(expr, lvalue=False):
-                # Iterate all the expressions
-                if isinstance(expr, ExprComma):
-                    for e in expr.exprs:
-                        if check_side_effects(e):
-                            return True
-                    return False
-                elif isinstance(expr, ExprCopy):
-                    return check_side_effects(expr.destination, True) or check_side_effects(expr.source)
-                elif isinstance(expr, ExprBinary):
-                    return check_side_effects(expr.right) or check_side_effects(expr.left)
-                elif isinstance(expr, ExprLoop):
-                    return check_side_effects(expr.cond) or check_side_effects(expr.body)
-                elif isinstance(expr, ExprAddrof):
-                    return check_side_effects(expr.expr)
-
-                # if this is an lvalue and we have a deref we assume side effects
-                elif isinstance(expr, ExprDeref):
-                    if lvalue:
-                        return True
-                    else:
-                        return check_side_effects(expr.expr)
-
-                elif isinstance(expr, ExprCall):
-                    if check_side_effects(expr.func):
-                        return True
-
-                    for arg in expr.args:
-                        if check_side_effects(arg):
-                            return True
-
-                    # assume indirect function calls have side effects
-                    if not isinstance(expr.func, ExprIdent) or not isinstance(expr.func.ident, FunctionIdentifier):
-                        return True
-                    func = self.func_list[expr.func.ident.index]
-
-                    # This function has side effects
-                    if func.pure_known and not func.pure:
-                        return True
-
-                    if not func.pure_known and func.name != f.name:
-                        unknown_functions[0] = True
-
-                else:
-                    return False
-
-            side_effects = check_side_effects(f.code)
-
-            if side_effects or not unknown_functions[0]:
-                f.pure_known = True
-                f.pure = not side_effects
-                return True
-
-            return False
-
-        # Iterate until no improvements are found
-        count = 0
-
-        for f in self.func_list:
-            if check_function(f):
-                count += 1
-
-        while count != 0:
-            count = 0
-            for f in self.func_list:
-                if check_function(f):
-                    count += 1
-
-    def _constant_fold(self, expr, stmt):
-        # TODO: on assign expressions we can probably do some kind of fold inside binary operation
-        #       so (5 + (a = 5)) can turn into (a = 5, 10)
-
-        if isinstance(expr, ExprComma):
-            new_exprs = []
-            for i, e in enumerate(expr.exprs):
-                e = self._constant_fold(e, False)
-
-                # If we got to a return just don't continue
-                if isinstance(e, ExprReturn):
-                    new_exprs.append(e)
-                    break
-
-                # elif isinstance(e, ExprLoop):
-                #
-                #     # Break on loops that never exit
-                #     # if isinstance(e.cond, ExprNumber) and e.cond.value != 0:
-                #     #     new_exprs.append(e.body)
-                #     #     break
-                #     #
-                #     # else:
-                #     new_exprs.append(e)
-
-                # Ignore nops
-                elif isinstance(e, ExprNop):
-                    continue
-
-                # only add if has side effects
-                else:
-                    # inside statements we only append non-pure nodes
-                    if stmt:
-                        if not e.is_pure(self):
-                            new_exprs.append(e)
-
-                    # Outside of that only add non-pure and the last element
-                    else:
-                        if not e.is_pure(self) or i == len(expr.exprs) - 1:
-                            new_exprs.append(e)
-
-            if len(new_exprs) == 0:
-                return ExprNop()
-
-            if len(new_exprs) == 1:
-                return new_exprs[0]
-
-            expr.exprs = new_exprs
-            return expr
-
-        elif isinstance(expr, ExprReturn):
-            expr.expr = self._constant_fold(expr.expr, False)
-
-        elif isinstance(expr, ExprBinary):
-            # TODO: support for multiple expressions in the binary expressions, that will allow
-            #       for better constant folding
-
-            expr.left = self._constant_fold(expr.left, False)
-            expr.right = self._constant_fold(expr.right, False)
-
-            if expr.op == '&&':
-                # We know both
-                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
-                    return 1 if expr.left.value != 0 and expr.right.value != 0 else 0
-
-                # If we first have 0 we can just return 0
-                if isinstance(expr.left, ExprNumber):
-                    if expr.left.value == 0:
-                        return ExprNumber(0)
-                    else:
-                        return expr.right
-
-                # if the second is a 0 we can just replace this with a comma operator
-                if isinstance(expr.right, ExprNumber) and expr.left.value == 0:
-                    return ExprComma().add(expr.left).add(ExprNumber(0))
-
-            elif expr.op == '||':
-                # We know both
-                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
-                    return ExprNumber(1) if expr.left.value != 0 or expr.right.value != 0 else ExprNumber(0)
-
-                # Left is constant
-                if isinstance(expr.left, ExprNumber):
-                    # if the left is a 0, then we can simply remove it and
-                    # return the right expression
-                    if expr.left.value == 0:
-                        return expr.right
-
-                    # if left is 1, we can ommit the right expression
-                    else:
-                        return ExprNumber(1)
-
-                # Right is a const
-                if isinstance(expr.right, ExprNumber):
-                    # If the const is 0 then the left will be the one
-                    # who says what will happen
-                    if expr.right.value == 0:
-                        return expr.left
-
-                    # If the const is a 1, then it will always be 1
-                    # and we can always run the left
-                    else:
-                        return ExprComma().add(expr.left).add(ExprNumber(1))
-
-            else:
-                # The numbers are know and we can calculate them
-                if isinstance(expr.left, ExprNumber) and isinstance(expr.right, ExprNumber):
-                    return ExprNumber(int(eval(f'{expr.left} {expr.op} {expr.right}')))
-
-        elif isinstance(expr, ExprDeref):
-            expr.expr = self._constant_fold(expr.expr, False)
-            # deref an addrof
-            if isinstance(expr.expr, ExprAddrof):
-                return expr.expr.expr
-
-        elif isinstance(expr, ExprAddrof):
-            expr.expr = self._constant_fold(expr.expr, False)
-            if isinstance(expr.expr, ExprDeref):
-                return expr.expr.expr
-
-        elif isinstance(expr, ExprCopy):
-            expr.source = self._constant_fold(expr.source, False)
-            expr.destination = self._constant_fold(expr.destination, False)
-            # assignment equals to itself and has no side effects
-            if expr.source == expr.destination and expr.source.is_pure(self):
-                return expr.destination
-
-        elif isinstance(expr, ExprLoop):
-            expr.cond = self._constant_fold(expr.cond, False)
-            expr.body = self._constant_fold(expr.body, True)
-
-            # The loop has a constant 0
-            if isinstance(expr.cond, ExprNumber) and expr.cond.value == 0:
-                return ExprNop()
-
-        return expr
-
-    def optimize(self):
-        last = str(self)
-
-        self._find_pure_functions()
-        for f in self.func_list:
-            f.code = self._constant_fold(f.code, True)
-
-        while str(self) != last:
-            last = str(self)
-            self._find_pure_functions()
-            for f in self.func_list:
-                f.code = self._constant_fold(f.code, True)
+        # Start the parsing
+        self.next_token()
 
     ####################################################################################################################
     # Helpers
     ####################################################################################################################
 
-    def __str__(self):
-        s = []
-        for f in self.func_list:
-            s.append(str(f))
-        return '\n'.join(s)
-
     def _define(self, name: str, ident: Identifier) -> ExprIdent:
         if self._use(name) is not None:
             return None
-        self._scopes[-1][name] = ident
+        self._scopes[-1].idents[name] = ident
         return ExprIdent(ident)
 
     def _def_var(self, name, typ) -> ExprIdent:
@@ -277,7 +59,7 @@ class Parser(Tokenizer):
         ret = self._define(name, ParameterIdentifier(name, self.func.num_params))
         if ret is None:
             return None
-        self.func.type.arg_types.append(typ)
+        self.func.type.param_types.append(typ)
         self.func.num_params += 1
         return ret
 
@@ -292,8 +74,19 @@ class Parser(Tokenizer):
 
     def _use(self, name: str) -> ExprIdent:
         for scope in reversed(self._scopes):
-            if name in scope:
-                return ExprIdent(scope[name])
+            if name in scope.idents:
+                return ExprIdent(scope.idents[name])
+        return None
+
+    def _resolve_type(self, name: List[str] or str or Tuple[str]) -> CType:
+        if name is str:
+            name = [name]
+        n = list(name)
+        n.sort()
+        n = tuple(n)
+        for scope in reversed(self._scopes):
+            if n in scope.type_defs:
+                return scope.type_defs[n]
         return None
 
     def _add_function(self, name: str, typ: CType):
@@ -303,8 +96,13 @@ class Parser(Tokenizer):
         self.func.prototype = False
         self.func_list.append(self.func)
 
+    def _add_typedef(self, name: List[str], typ: CType):
+        nlst = list(name)
+        nlst.sort()
+        self._scopes[-1].type_defs[tuple(nlst)] = typ
+
     def _push_scope(self):
-        self._scopes.append({})
+        self._scopes.append(Parser.Scope())
 
     def _pop_scope(self):
         self._scopes.pop()
@@ -315,24 +113,36 @@ class Parser(Tokenizer):
             return pos1
         return CodePosition(pos1.start_line, pos2.end_line, pos1.start_column, pos2.end_column)
 
-    def _check_assignment(self, e1: Expr, e2: Expr):
-        t1 = e1.resolve_type(self)
-        t2 = e2.resolve_type(self)
+    def _check_assignment(self, e1: Expr or CType, e2: Expr or CType, action: str):
+        if isinstance(e1, Expr):
+            t1 = e1.resolve_type(self)
+        else:
+            t1 = e1
+
+        if isinstance(e2, Expr):
+            t2 = e2.resolve_type(self)
+        else:
+            t2 = e2
 
         if isinstance(t1, CPointer) and isinstance(t2, CInteger):
-            self.report_warn('initialization makes pointer from integer without a cast', e2.pos)
+            self.report_warn(f'{action} makes pointer from integer without a cast', e2.pos)
             return True
         elif isinstance(t1, CInteger) and isinstance(t2, CPointer):
-            self.report_warn('initialization makes integer from pointer without a cast', e2.pos)
+            self.report_warn(f'{action} makes integer from pointer without a cast', e2.pos)
             return True
         elif isinstance(t1, CInteger) and isinstance(t2, CInteger):
             return True
         elif isinstance(t1, CPointer) and isinstance(t2, CPointer):
             if t1.type != t2.type:
-                self.report_warn('initialization from incompatible pointer type', e2.pos)
+                self.report_warn(f'{action} from incompatible pointer type', e2.pos)
             return True
         else:
-            assert False
+            if action == 'return':
+                action = 'returning'
+            elif action == 'initialization':
+                action = 'initializing'
+            self.report_error(f'incompatible types when {action} type `{t1}` using type `{t2}`', e2.pos)
+            return False
 
     def _check_binary_op(self, op: str, pos: CodePosition, e1: Expr, e2: Expr):
         t1 = e1.resolve_type(self)
@@ -398,8 +208,6 @@ class Parser(Tokenizer):
         self.report('error', Parser.RED, msg, pos, inside_function)
         exit(-1)
 
-    # TODO: warning
-
     ####################################################################################################################
     # Expression parsing
     ####################################################################################################################
@@ -409,7 +217,22 @@ class Parser(Tokenizer):
             val = self.token.value
             pos = self.token.pos
             self.next_token()
-            return ExprNumber(val, pos)
+
+            # Integer Literal modifiers
+            # Kinda hacky but whatever
+            if self.is_token(IdentToken) and self.token.value == 'u':
+                typ = CInteger(16, False)
+                self.next_token()
+            elif self.is_token(IdentToken) and self.token.value == 'ul':
+                typ = CInteger(32, False)
+                self.next_token()
+            elif self.is_token(IdentToken) and self.token.value == 'l':
+                typ = CInteger(32, True)
+                self.next_token()
+            else:
+                typ = CInteger(16, True)
+
+            return ExprNumber(val, typ, pos)
 
         elif self.is_token(IdentToken):
             val = self.token.value
@@ -443,20 +266,20 @@ class Parser(Tokenizer):
                     s = 'increment' if op == '+' else 'decrement'
                     self.report_error(f'lvalue required as {s} operand', pos)
 
-                self._check_binary_op(op, pos, x, ExprNumber(1))
+                self._check_binary_op(op, pos, x, ExprNumber(1, CInteger(16, False)))
 
                 temp = self._temp(x.resolve_type(self))
                 if x.is_pure(self):
                     x = ExprComma(self._combine_pos(x.pos, pos))\
                         .add(ExprCopy(x, temp))\
-                        .add(ExprCopy(ExprBinary(x, op, ExprNumber(1)), x))\
+                        .add(ExprCopy(ExprBinary(x, op, ExprNumber(1, CInteger(16, False))), x))\
                         .add(temp)
                 else:
                     temp2 = self._temp(x.resolve_type(self))
                     x = ExprComma(self._combine_pos(x.pos, pos))\
                         .add(ExprCopy(ExprAddrof(x), temp))\
                         .add(ExprCopy(ExprDeref(temp), temp2))\
-                        .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1)), ExprDeref(temp)))\
+                        .add(ExprCopy(ExprBinary(ExprDeref(temp), op, ExprNumber(1, CInteger(16, False))), ExprDeref(temp)))\
                         .add(temp2)
 
             elif self.match_token('['):
@@ -471,7 +294,24 @@ class Parser(Tokenizer):
                 if not isinstance(sub.resolve_type(self), CInteger):
                     self.report_error('array subscript is not an integer', pos)
 
-                return ExprDeref(ExprBinary(x, '+', sub), self._combine_pos(x.pos, temp_pos))
+                multiply = 1
+                if isinstance(arr_type, CPointer):
+                    multiply = arr_type.type.sizeof()
+
+                return ExprDeref(ExprBinary(x, '+', ExprBinary(sub, '*', ExprNumber(multiply))), self._combine_pos(x.pos, temp_pos))
+
+            elif self.match_token('.'):
+                member, mempos = self.expect_ident()
+
+                typ = x.resolve_type(self)
+
+                if not isinstance(typ, CStruct):
+                    self.report_fatal_error(f'request for member `{member}` in something not a structure or union', pos)
+
+                if member not in typ.items:
+                    self.report_fatal_error(f'`{typ}` has no member named `{member}`')
+
+                return ExprDeref(ExprCast(ExprBinary(x, '+', ExprNumber(typ.offsetof(member))), CPointer(typ.items[member])), self._combine_pos(x.pos, mempos))
 
             elif self.match_token('('):
                 args = []
@@ -723,7 +563,7 @@ class Parser(Tokenizer):
             self.next_token()
             y = self._parse_assignment()
 
-            self._check_assignment(x, y)
+            self._check_assignment(x, y, 'initialization')
 
             if op == '=':
                 x = ExprCopy(y, x, self._combine_pos(x.pos, y.pos))
@@ -751,6 +591,93 @@ class Parser(Tokenizer):
 
     def _parse_expr(self):
         return self._parse_comma()
+
+    ####################################################################################################################
+    # Type parsing
+    ####################################################################################################################
+
+    def _parse_type(self, raise_error):
+        typ = None
+        pos = self.token.pos
+
+        # See if any of these
+        words = []
+        while self.is_keyword('unsigned') or self.is_keyword('signed') or self.is_keyword('int') or self.is_keyword('short') or self.is_keyword('char') or self.is_keyword('long'):
+            words.append(self.token.value)
+            self.next_token()
+
+        if len(words) != 0:
+            # If has any of these then it is a number
+            typ = self._resolve_type(words)
+
+        elif self.match_keyword('struct'):
+            name, pos = self.expect_ident()
+            assert False
+
+        elif self.match_keyword('enum'):
+            name, pos = self.expect_ident()
+            assert False
+
+        elif self.match_keyword('union'):
+            name, pos = self.expect_ident()
+            assert False
+
+        elif self.match_keyword('void'):
+            typ = CVoid()
+
+        elif self.is_token(IdentToken):
+            name, pos = self.expect_ident()
+
+            # Check if is a typedef
+            if self._resolve_type(name) is not None:
+                return self._resolve_type(name)
+
+            if raise_error:
+                self.token.pos = pos
+                self.report_fatal_error(f'unknown type name `{name}`')
+            else:
+                return None
+        else:
+            if raise_error:
+                self.expect_ident()
+            else:
+                return None
+
+        return typ
+
+    def _parse_type_name(self):
+        typ = self._parse_type(False)
+        if typ is None:
+            return None, None, None
+
+        # Parse the prefixes
+        while self.match_token('*'):
+            typ = CPointer(typ)
+
+        name = None
+        name_pos = None
+        if self.is_token(IdentToken):
+            name, name_pos = self.expect_ident()
+
+        array_lens = []
+
+        # Parse the postfixes
+        while self.match_token('['):
+            if self.is_token(IntToken):
+                val = self.token.value
+                self.next_token()
+                array_lens.append(val)
+            else:
+                # incomplete array
+                array_lens.append(None)
+            self.expect_token(']')
+
+        for i in reversed(array_lens):
+            if not typ.is_complete():
+                self.report_fatal_error(f'array type has incomplete element type `{typ}`', name_pos)
+            typ = CArray(typ, i)
+
+        return typ, name, name_pos
 
     ####################################################################################################################
     # Statement parsing
@@ -815,6 +742,8 @@ class Parser(Tokenizer):
                     self.report_warn('`return` with no value, in function returning non-void', pos)
                     stmt.expr = ExprNumber(0)
 
+            self._check_assignment(self.func.type.ret_type, stmt, 'return')
+
             temp_pos = self.token.pos
             self.expect_token(';')
             stmt.pos = self._combine_pos(pos, temp_pos)
@@ -832,89 +761,6 @@ class Parser(Tokenizer):
             self.expect_token(';')
             stmt.pos = self._combine_pos(stmt.pos, temp_pos)
             return stmt
-
-    def _parse_type(self, raise_error):
-        typ = None
-        if self.match_keyword('unsigned'):
-            if self.is_keyword('int') or self.is_keyword('char') or self.is_keyword('short'):
-                self.next_token()
-            typ = CInteger(16, False)
-
-        elif self.match_keyword('signed'):
-            if self.is_keyword('int') or self.is_keyword('char') or self.is_keyword('short'):
-                self.next_token()
-            typ = CInteger(16, True)
-
-        elif self.match_keyword('int') or self.match_keyword('short'):
-            typ = CInteger(16, True)
-
-        elif self.match_keyword('char'):
-            typ = CInteger(16, False)
-
-        elif self.match_keyword('struct'):
-            name, pos = self.expect_ident()
-            assert False
-
-        elif self.match_keyword('enum'):
-            name, pos = self.expect_ident()
-            assert False
-
-        elif self.match_keyword('union'):
-            name, pos = self.expect_ident()
-            assert False
-
-        elif self.match_keyword('void'):
-            typ = CVoid()
-
-        elif self.is_token(IdentToken):
-            name, pos = self.expect_ident()
-            # TODO: check inside the known types
-            if raise_error:
-                self.token.pos = pos
-                self.report_fatal_error(f'unknown type name `{name}`')
-            else:
-                return None
-        else:
-            if raise_error:
-                self.expect_ident()
-            else:
-                return None
-
-        return typ
-
-    def _parse_type_name(self):
-        typ = self._parse_type(False)
-        if typ is None:
-            return None, None, None
-
-        # Parse the prefixes
-        while self.match_token('*'):
-            typ = CPointer(typ)
-
-        name = None
-        name_pos = None
-        if self.is_token(IdentToken):
-            name, name_pos = self.expect_ident()
-
-        array_lens = []
-
-        # Parse the postfixes
-        while self.match_token('['):
-            if self.is_token(IntToken):
-                val = self.token.value
-                self.next_token()
-                array_lens.append(val)
-            else:
-                # incomplete array
-                array_lens.append(None)
-            self.expect_token(']')
-
-        for i in reversed(array_lens):
-            if not typ.is_complete():
-                self.report_fatal_error(f'array type has incomplete element type `{typ}`', name_pos)
-            typ = CArray(typ, i)
-
-        return typ, name, name_pos
 
     def _parse_func(self, func_name_pos: CodePosition, already_exists: bool):
         # Get the params
@@ -935,7 +781,6 @@ class Parser(Tokenizer):
 
             # Only do these stuff if the function does not exists already
             if not already_exists:
-                # TODO: check complete
                 if not typ.is_complete():
                     self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos, False)
 
@@ -979,7 +824,7 @@ class Parser(Tokenizer):
             self.func.prototype = False
 
             # Parse all the variable declarations
-            self.push()
+            self.save()
             typ, name, name_pos = self._parse_type_name()
             while typ is not None:
                 self.discard()
@@ -1000,7 +845,7 @@ class Parser(Tokenizer):
                         self.report_fatal_error(f'redefinition of `{name}`', name_pos)
 
                     if expr is not None:
-                        self._check_assignment(new_var, expr)
+                        self._check_assignment(new_var, expr, 'wtf')
                         self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(name_pos, expr.pos)))
 
                 # Parse all the decls
@@ -1011,9 +856,9 @@ class Parser(Tokenizer):
                     parse_var_decl()
 
                 # Next
-                self.push()
+                self.save()
                 typ, name, name_pos = self._parse_type_name()
-            self.pop()
+            self.restore()
 
             # Continue and parse the block
             self._push_scope()
@@ -1032,102 +877,57 @@ class Parser(Tokenizer):
         self._pop_scope()
 
     def parse(self):
-        self._push_scope()
         while not self.is_token(EofToken):
-
-            # Typedef
             if self.match_keyword('typedef'):
-                assert False
+                typ, name, pos = self._parse_type_name()
 
-            # Struct declaration
-            elif self.match_keyword('struct'):
-                assert False
+                if self._resolve_type(name) is not None:
+                    if self._resolve_type(name) != typ:
+                        self.report_error(f'conflicting types for `{name}`', pos, False)
+                else:
+                    self._add_typedef(name, typ)
 
-            # Enum declaration
-            elif self.match_keyword('enum'):
-                assert False
-
-            # Union declaration
-            elif self.match_keyword('union'):
-                assert False
+                self.expect_token(';')
 
             # Ignore random ;
             elif self.match_token(';'):
                 pass
 
-            # Either a global or
+            # Either a global or a function
             else:
-                # Reset the state
-                # is_static = False
-                # conv = CallingConv.STACK_CALL
-                #
-                # # Handle modifiers for global variables and functions
-                # while True:
-                #     # Static modifier
-                #     if self.is_keyword('static'):
-                #         if is_static:
-                #             self.report_error('duplicate `static`')
-                #
-                #         self.next_token()
-                #         is_static = True
-                #
-                #     elif self.match_keyword('__regcall'):
-                #         conv = CallingConv.REGISTER_CALL
-                #
-                #     elif self.match_keyword('__stackcall'):
-                #         conv = CallingConv.STACK_CALL
-                #
-                #     # No more modifiers
-                #     else:
-                #         break
+                # We are gonna check if this is a variable or function
+                # if we get a `=` or `;` before a `(`, it is a variable
+                func = False
+                self.save()
+                while not self.is_token('=') and not self.is_token(';'):
+                    if self.is_token('('):
+                        func = True
+                        break
+                    self.next_token()
+                self.restore()
 
-                typ = self._parse_type(True)
+                # Now that we know what this is we can parse it normally
+                if func:
+                    ret_typ = self._parse_type(True)
+                    name, name_pos = self.expect_ident()
 
-                # Get the name, making sure there is no definition of it already
-                self.push()
-                name, name_pos = self.expect_ident()
+                    if isinstance(ret_typ, CArray):
+                        self.report_error(f'`{name}` declared as function returning an array', name_pos)
 
-                # Check if a function
-                if self.is_token('('):
                     e = self._def_fun(name)
                     if e is not None:
-                        self._add_function(name, typ)
+                        self._add_function(name, ret_typ)
                         self.func = self.func_list[e.ident.index]
                     else:
-                        if self.func.type.ret_type != typ:
+                        if self.func.type.ret_type != ret_typ:
                             self.report_fatal_error(f'conflicting types for `{self.func.name}`', name_pos, False)
 
                     self._parse_func(name_pos, e is None)
 
-                # Assume global variable instead
                 else:
-                    # def parse_decl():
-                    #     expr = None
-                    #
-                    #     # Check the name
-                    #     if self.unit.get_symbol(name) is not None:
-                    #         self.token.pos = name_pos
-                    #         self.report_error(f'redefinition of `{name}`')
-                    #
-                    #     # parse expression if any
-                    #     if self.match_token('='):
-                    #         expr = self._parse_expr()
-                    #         if not expr.is_pure():
-                    #             self.token.pos = expr.pos
-                    #             self.report_error('initializer element is not constant')
-                    #
-                    #     # add the symbol
-                    #     self.unit.add_symbol(VariableDeclaration(name, typ, expr))
-                    #
-                    # # parse all decls
-                    # parse_decl()
-                    # while self.match_token(','):
-                    #     name, name_pos = self.expect_ident()
-                    #     parse_decl()
-                    #
-                    # self.expect_token(';')
                     pass
 
-        self._pop_scope()
 
-        return self
+
+
+

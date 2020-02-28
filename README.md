@@ -6,88 +6,72 @@ The reason I am creating this compiler is so I can eventually use it to write
 some simple OS for the DCPU16, and because I like C and I can't find anything 
 that I can port easily I will just create my own :shrug:
 
-This was heavily influenced by Bisqwit's compiler series and was modified to work with this language
-and support whatever that my language support and the series's language did not (global variables for example)
-
 ## Example 
 
 ```c
-void putc(int c);
-
-int* videoram = 0x8000;
-
-void main() {
-    putc('H');
-    putc('A');
-    putc('I');
+int add(int a, int b) {
+    return a + b;
 }
 
-void putc(int c) {
-    *videoram = (0xf << 8) | (0x0 << 12) | (c);
-    videoram++;
+int mul(int num, int times) {
+    int res = 0;
+    while(times--) {
+        res += num;
+    }
+    return res;
 }
 ```
 
 would compile to
 ```
-JSR main
-:_l0
-	SET PC, _l0
+:add
+    SET PUSH, J
+    SET J, SP
+    SET A, [J + 1]
+    ADD A, [J + 2]
+    SET SP, J
+    SET J, POP
+    SET PC, POP
 
-:videoram
-DAT 32768
 
-:main
-	SET X, SP
-	SUB SP, 1
-	SET [SP], 72
-	JSR putc
-	ADD SP, 1
-	SUB SP, 1
-	SET [SP], 65
-	JSR putc
-	ADD SP, 1
-	SUB SP, 1
-	SET [SP], 73
-	JSR putc
-	ADD SP, 1
-	SET PC, POP
-
-:putc
-	SET X, SP
-	SET A, [videoram]
-	SET [A], 3840
-	SET B, [X + 1]
-	BOR [A], B
-	ADD [videoram], 1
-	SET PC, POP
+:mul
+    SET PUSH, J
+    SET J, SP
+    SUB SP, 2
+    SET [J - 1], 0
+    :L1
+    SET [J - 2], [J + 2]
+    SUB [J + 2], 1
+    IFE [J - 2], 0
+    SET PC, L0
+    ADD [J - 1], [J + 1]
+    SET PC, L1
+    :L0
+    SET A, [J - 1]
+    SET SP, J
+    SET J, POP
+    SET PC, POP
 ```
 
-the main problem for now is that function calls are really not efficient, would probably want to add a pass to remove
-duplicate 
-```
-ADD SP, 1
-SUB SP, 1
-```
+As you can see the assembly is actually quite nicely optimized, I plan adding soon the `register` modifier and use it so
+you can manually set some variables to not be allocated on the stack, so in the mul for example you can easily move `res`
+to a register and get a major boost in performance since it would not keep modifying it, or even move the length to a register
+for another big boost.
 
 the way to get the best performance is to have assembly functions as `regcall` but to not use it for c functions since 
-the code gen for it is horrible right now 
+the code gen for it is horrible right now.
+
+## ABI
+### Calling convention
+The compiler is compliant to the [0x10c Standards Committee ABI](https://github.com/0x10cStandardsCommittee/0x10c-Standards/blob/master/ABI/ABI%20draft%202.txt) 
+(Supporting both stackcall and regcall). We do use the function Prologue and Epilogue and shown in the [first draft](https://github.com/0x10cStandardsCommittee/0x10c-Standards/blob/master/ABI/Draft_ABI_1.txt#L49-L70), 
+this does not affect calling functions which do not implement that because it is only related to code generation inside
+the current function.
 
 ## Working
-* Global variables
-* Functions and function calls
-    * support for stack call
-    * support for register call (code gen for regcall functions is pretty shitty at the moment)     
-* Variables (must be declared at start of function)
-* All binary and unary operators
-    * pointer arith is kinda broken on types which are not 16bit
-* type checking
-* if and else
-* while loop
-* return
-* pointers
-* casts
-
-## TODO
-* Structs, Enums and Unions
-* Multiple compilation units
+* Functions (support bot for regcall and stackcall)
+* Variables (only at the start of functions)
+* All of the arithmetic/bitwise operators
+* While and do while loops
+* If/Else (No code gen yet)
+* Stack arrays

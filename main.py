@@ -1,43 +1,59 @@
-from compiler.parser import Parser
-from compiler.ir import IRCompiler
-import dumper
+from frontend.optimizer import Optimizer
+from frontend.parser import Parser
 
-if __name__ == '__main__':
-    parser = Parser("""    
-int eq(int a, int b, int yes, int no) {
-    return a == b ? yes : no;
+from backend.dcpu16.translator import Dcpu16Translator
+
+code = """
+int add(int a, int b) {
+    return a + b;
 }
-""")
 
-    ast = parser.parse()
+int mul(int num, int times) {
+    int res = 0;
+    while(times--) {
+        res += num;
+    }
+    return res;
+}
+"""
 
-    if ast.got_errors:
-        exit(-1)
+print("============================")
+print(" Code ")
+print("============================")
+print(code)
 
-    print('AST:')
-    print('------------------------------')
-    for func in ast.func_list:
-        print(func)
-    print('------------------------------')
+#
+# Parse the code
+#
+p = Parser(code)
+p.parse()
 
-    ast.optimize()
+print()
+print("============================")
+print(" AST ")
+print("============================")
+print('\n\n'.join(map(str, p.func_list)))
 
-    print('Optimized AST:')
-    print('------------------------------')
-    for func in ast.func_list:
-        print(func)
-    print('------------------------------')
+#
+# Optimize the AST
+#
+opt = Optimizer(p)
+opt.optimize()
 
-    comp = IRCompiler(ast)
-    comp.compile()
+print()
+print("============================")
+print(" Optimized AST ")
+print("============================")
+print('\n\n'.join(map(str, p.func_list)))
 
-    print('IR:')
-    print('------------------------------')
-    print(str(comp))
-    print('------------------------------')
+#
+# Translate it to assembler
+#
+trans = Dcpu16Translator(p)
+trans.translate()
 
-    comp.optimize()
-    print('Optimized IR:')
-    print('------------------------------')
-    print(str(comp))
-    print('------------------------------')
+print()
+print("============================")
+print(" Assembly ")
+print("============================")
+print('\n'.join(trans.get_instructions()))
