@@ -167,8 +167,23 @@ class Dcpu16Translator:
         # Set up local vars
         if len(func.vars) != 0:
             for var in func.vars:
-                loc = self._alloca(var.sizeof())
+                if var.storage == StorageClass.AUTO:
+                    loc = self._alloca(var.typ.sizeof())
+                elif var.storage == StorageClass.REGISTER:
+                    # Can only do this for register sized stuff
+                    if (isinstance(var.typ, CInteger) and var.typ.bits == 16) or \
+                            isinstance(var.typ, CPointer) or \
+                            isinstance(var.typ, CFunction):
+                        loc = self._alloc_scratch()
+                    else:
+                        loc = self._alloca(var.typ.sizeof())
+                elif var.storage == StorageClass.STATIC:
+                    # TODO: This is just a global variable
+                    assert False
+                else:
+                    assert False
                 self._vars.append(loc)
+
         # Store place for locals
         locals_pos = self._asm.get_pos()
         self._asm.put_instruction(f';; Locals allocation here')
@@ -239,7 +254,7 @@ class Dcpu16Translator:
             elif isinstance(typ, CPointer) or isinstance(typ, CArray):
                 typ = CInteger(16, False)
             else:
-                assert False
+                assert False, f'`{typ}` ({type(typ)})'
 
             if dest is None:
                 # This allows for doing maths on operands at compile time
@@ -310,18 +325,27 @@ class Dcpu16Translator:
             ident = expr.ident
             if isinstance(ident, VariableIdentifier):
                 typ = expr.resolve_type(self._ast)
+                var = self._get_var(ident.index)
                 # The variable
                 if dest is None:
                     # Arrays and structs are turned into pointers
                     if isinstance(typ, CArray) or isinstance(typ, CStruct):
-                        return self._get_var(ident.index)
+                        return var
                     else:
-                        return Deref(self._get_var(ident.index))
+                        if isinstance(var, Reg):
+                            # If this is a register then no need for deref
+                            return var
+                        else:
+                            return Deref(var)
                 else:
                     if isinstance(typ, CArray):
                         self._translate_expr(ExprAddrof(expr), dest)
                     else:
-                        self._asm.emit_set(dest, Deref(self._get_var(ident.index)))
+                        if isinstance(var, Reg):
+                            # If this is a register then no need for deref
+                            self._asm.emit_set(dest, var)
+                        else:
+                            self._asm.emit_set(dest, Deref(var))
 
             elif isinstance(ident, ParameterIdentifier):
                 if dest is None:
@@ -368,7 +392,7 @@ class Dcpu16Translator:
             elif isinstance(expr.destination, ExprIdent):
                 dest_op = self._translate_expr(expr.destination, None)
             else:
-                assert False
+                assert False, f'`{expr.destination}` ({type(expr.destination)})'
 
             if self._can_resolve_to_operand(expr.source):
                 self._asm.emit_set(dest_op, self._translate_expr(expr.source, None))
@@ -422,12 +446,17 @@ class Dcpu16Translator:
                 self._set_scratch(Reg.A)
                 self._translate_expr(expr.expr, Reg.A)
             else:
-                # otherwise allocate a scratch and then move it to A
-                # at the end
-                reg = self._alloc_scratch()
-                self._translate_expr(expr.expr, reg)
-                self._free_scratch(reg)
-                self._asm.emit_set(Reg.A, reg)
+                if self._can_resolve_to_operand(expr.expr) and self._translate_expr(expr.expr, None) == Reg.A:
+                    # check if by any chance this expression resolves to A already
+                    # if so no need to do anything
+                    pass
+                else:
+                    # otherwise allocate a scratch and then move it to A
+                    # at the end
+                    reg = self._alloc_scratch()
+                    self._translate_expr(expr.expr, reg)
+                    self._free_scratch(reg)
+                    self._asm.emit_set(Reg.A, reg)
 
             # emit the function ending
             self._return_pos.append(self._asm.get_pos())

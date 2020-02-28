@@ -53,10 +53,9 @@ would compile to
     SET PC, POP
 ```
 
-As you can see the assembly is actually quite nicely optimized, I plan adding soon the `register` modifier and use it so
-you can manually set some variables to not be allocated on the stack, so in the mul for example you can easily move `res`
-to a register and get a major boost in performance since it would not keep modifying it, or even move the length to a register
-for another big boost.
+As you can see the assembly is actually quite nicely optimized, You can also use the `register` storage modifier on 
+integer variables to tell the compiler to try and use registers for them, if you do that correctly it can actually
+generate some really nicely optimized code :)
 
 the way to get the best performance is to have assembly functions as `regcall` but to not use it for c functions since 
 the code gen for it is horrible right now.

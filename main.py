@@ -4,12 +4,10 @@ from frontend.parser import Parser
 from backend.dcpu16.translator import Dcpu16Translator
 
 code = """
-int add(int a, int b) {
-    return a + b;
-}
-
-int mul(int num, int times) {
-    int res = 0;
+int mul(int _num, int _times) {
+    int register res = 0;
+    int register times = _times;
+    int register num = _num;
     while(times--) {
         res += num;
     }
@@ -27,6 +25,7 @@ print(code)
 #
 p = Parser(code)
 p.parse()
+assert not p.got_errors
 
 print()
 print("============================")

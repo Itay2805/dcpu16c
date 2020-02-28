@@ -34,6 +34,7 @@ class Parser(Tokenizer):
         self._add_typedef(['unsigned', 'long'], CInteger(32, False))
 
         self._temp_counter = 0
+        self.got_errors = False
 
         # Start the parsing
         self.next_token()
@@ -48,11 +49,11 @@ class Parser(Tokenizer):
         self._scopes[-1].idents[name] = ident
         return ExprIdent(ident)
 
-    def _def_var(self, name, typ) -> ExprIdent:
+    def _def_var(self, name: str, typ: CType, storage: StorageClass) -> ExprIdent:
         ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
         if ret is None:
             return None
-        self.func.vars.append(typ)
+        self.func.vars.append(Variable(ret.ident, typ, storage))
         return ret
 
     def _def_param(self, name, typ) -> ExprIdent:
@@ -68,7 +69,7 @@ class Parser(Tokenizer):
         return ret
 
     def _temp(self, typ) -> ExprIdent:
-        ret = self._def_var(f'$TEMP{self._temp_counter}', typ)
+        ret = self._def_var(f'$TEMP{self._temp_counter}', typ, StorageClass.AUTO)
         self._temp_counter += 1
         return ret
 
@@ -596,6 +597,23 @@ class Parser(Tokenizer):
     # Type parsing
     ####################################################################################################################
 
+    def _parse_storage_decl(self):
+        spec = StorageClass.AUTO
+        while True:
+            if self.match_keyword('register'):
+                if spec != StorageClass.AUTO:
+                    self.report_error('multiple storage classes in declaration specifiers')
+                else:
+                    spec = StorageClass.REGISTER
+            elif self.match_keyword('static'):
+                if spec != StorageClass.AUTO:
+                    self.report_error('multiple storage classes in declaration specifiers')
+                else:
+                    spec = StorageClass.STATIC
+            else:
+                break
+        return spec
+
     def _parse_type(self, raise_error):
         typ = None
         pos = self.token.pos
@@ -645,20 +663,14 @@ class Parser(Tokenizer):
 
         return typ
 
-    def _parse_type_name(self):
-        typ = self._parse_type(False)
-        if typ is None:
-            return None, None, None
-
+    def _parse_type_prefix(self, typ):
         # Parse the prefixes
         while self.match_token('*'):
             typ = CPointer(typ)
 
-        name = None
-        name_pos = None
-        if self.is_token(IdentToken):
-            name, name_pos = self.expect_ident()
+        return typ
 
+    def _parse_type_postfix(self, typ, name_pos):
         array_lens = []
 
         # Parse the postfixes
@@ -677,6 +689,19 @@ class Parser(Tokenizer):
                 self.report_fatal_error(f'array type has incomplete element type `{typ}`', name_pos)
             typ = CArray(typ, i)
 
+        return typ
+
+    def _parse_type_name(self):
+        typ = self._parse_type(False)
+        if typ is None:
+            return None, None, None
+
+        typ = self._parse_type_prefix(typ)
+
+        name = None
+        name_pos = None
+        if self.is_token(IdentToken):
+            name, name_pos = self.expect_ident()
         return typ, name, name_pos
 
     ####################################################################################################################
@@ -823,42 +848,64 @@ class Parser(Tokenizer):
 
             self.func.prototype = False
 
-            # Parse all the variable declarations
-            self.save()
-            typ, name, name_pos = self._parse_type_name()
-            while typ is not None:
+            # Parse all the variables
+            # TODO: Support doing that not in the start of the function
+            while True:
+                # Save before we continue, so we can restore later
+                self.save()
+
+                # Parse the storage before
+                spec = self._parse_storage_decl()
+                pos = self.token.pos
+
+                # Parse the type, if failed we no longer have variables
+                typ = self._parse_type(False)
+                if typ is None:
+                    break
+
+                # Parse the after storage spec
+                spec2 = self._parse_storage_decl()
+
+                # Combine specs
+                if spec != StorageClass.AUTO and spec2 != StorageClass.AUTO:
+                    self.report_error('multiple storage classes in declaration specifiers', pos)
+                elif spec == StorageClass.AUTO and spec2 != StorageClass.AUTO:
+                    spec = spec2
+
+                # we can discard of the save because we def have a variable
                 self.discard()
 
-                if isinstance(typ, CArray) and typ.len is None:
-                    self.report_error(f'array size missing in `{name}`', name_pos)
-                elif not typ.is_complete():
-                    self.report_error(f'storage size of `{name}` isnt known', name_pos)
+                # Get the name
+                while True:
 
-                # Helpers to parse a single decl
-                def parse_var_decl():
-                    expr = None
-                    if self.match_token('='):
-                        expr = self._parse_assignment()
+                    # parse the specific type of variable
+                    cur_typ = self._parse_type_prefix(typ)
+                    var_name, var_name_pos = self.expect_ident()
+                    cur_typ = self._parse_type_postfix(cur_typ, var_name_pos)
 
-                    new_var = self._def_var(name, typ)
+                    # Make sure is a complete type
+                    if not cur_typ.is_complete():
+                        self.report_error(f'storage size of `{var_name}` isnt known', var_name_pos)
+
+                    # Define the variable
+                    new_var = self._def_var(var_name, typ, spec)
                     if new_var is None:
-                        self.report_fatal_error(f'redefinition of `{name}`', name_pos)
+                        self.report_error(f'redefinition of `{var_name}`', var_name_pos)
 
-                    if expr is not None:
-                        self._check_assignment(new_var, expr, 'wtf')
-                        self.func.code.add(ExprCopy(expr, new_var, self._combine_pos(name_pos, expr.pos)))
+                    # Check for initialization
+                    if self.match_token('='):
+                        # if has initialization then parse the expression, check the assignment and add the
+                        # copy expression to the start of the function
+                        expr = self._parse_assignment()
+                        self._check_assignment(cur_typ, expr, 'initialization')
+                        self.func.code.add(ExprCopy(expr, new_var))
 
-                # Parse all the decls
-                parse_var_decl()
-                while not self.match_token(';'):
+                    if self.match_token(';'):
+                        # we are done with the specific variable list
+                        break
+
+                    # We expect this before the next one
                     self.expect_token(',')
-                    name, name_pos = self.expect_ident()
-                    parse_var_decl()
-
-                # Next
-                self.save()
-                typ, name, name_pos = self._parse_type_name()
-            self.restore()
 
             # Continue and parse the block
             self._push_scope()

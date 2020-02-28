@@ -112,7 +112,7 @@ class ExprIdent(Expr):
 
     def resolve_type(self, ast):
         if isinstance(self.ident, VariableIdentifier):
-            return ast.func.vars[self.ident.index]
+            return ast.func.vars[self.ident.index].typ
         elif isinstance(self.ident, FunctionIdentifier):
             return ast.func_list[self.ident.index]
         elif isinstance(self.ident, ParameterIdentifier):
@@ -357,6 +357,15 @@ class ExprReturn(Expr):
 # Function
 ########################################################################################################################
 
+
+class Variable:
+
+    def __init__(self, ident: Identifier, typ: CType, storage: StorageClass):
+        self.ident = ident
+        self.typ = typ
+        self.storage = storage
+
+
 class Function:
 
     def __init__(self, name: str):
@@ -364,7 +373,7 @@ class Function:
         self.name = name
         self.code = None
         self.num_params = 0
-        self.vars = []  # type: List[CType]
+        self.vars = []  # type: List[Variable]
 
         self.prototype = False
         self.type = CFunction()

@@ -1,7 +1,17 @@
 from typing import *
+from enum import Enum, auto
+
+
+class StorageClass(Enum):
+    AUTO = auto()
+    STATIC = auto()
+    REGISTER = auto()
 
 
 class CType:
+
+    def __init__(self):
+        pass
 
     def __ne__(self, other):
         return not (self == other)
@@ -16,6 +26,7 @@ class CType:
 class CInteger(CType):
 
     def __init__(self, bits: int, signed: bool):
+        super(CInteger, self).__init__()
         self.bits = bits
         self.signed = signed
 
@@ -46,6 +57,7 @@ class CInteger(CType):
 class CPointer(CType):
 
     def __init__(self, typ: CType):
+        super(CPointer, self).__init__()
         self.type = typ
 
     def sizeof(self):
@@ -67,7 +79,7 @@ class CPointer(CType):
 class CVoid(CType):
 
     def __init__(self):
-        pass
+        super(CVoid, self).__init__()
 
     def __eq__(self, other):
         return isinstance(other, CVoid)
@@ -84,12 +96,13 @@ class CVoid(CType):
 
 class CFunction(CType):
 
-    def sizeof(self):
-        return 1
-
     def __init__(self):
+        super(CFunction, self).__init__()
         self.ret_type = CVoid()  # type: CType
         self.param_types = []  # type: List[CType]
+
+    def sizeof(self):
+        return 2
 
     def __str__(self):
         args = ', '.join(map(str, self.param_types))
@@ -102,6 +115,7 @@ class CFunction(CType):
 class CArray(CType):
 
     def __init__(self, typ: CType, len: int or None):
+        super(CArray, self).__init__()
         self.type = typ
         self.len = len
 
@@ -119,18 +133,20 @@ class CArray(CType):
             return f'{self.type}[{self.len}]'
 
 
+def _align(base, size):
+    if base % size != 0:
+        base += size - base % size
+    return base
+
+
 class CStruct(CType):
 
     def __init__(self, name: str, name_pos):
+        super(CStruct, self).__init__()
         self.name = name
         self.packed = 0
         self.pos = name_pos
         self.items = {}  # type: Dict[str, CType]
-
-    def _align(self, base, size):
-        if base % size != 0:
-            base += size - base % size
-        return base
 
     def offsetof(self, name):
         offset = 0
@@ -141,7 +157,7 @@ class CStruct(CType):
             if self.packed:
                 offset += self.items[item].sizeof()
             else:
-                offset += self._align(offset, self.items[item].sizeof()) + self.items[item].sizeof()
+                offset += _align(offset, self.items[item].sizeof()) + self.items[item].sizeof()
 
     def sizeof(self):
         s = 0
