@@ -101,90 +101,145 @@ class Assembler:
             self.put_instruction(f'SET {b}, {a}')
 
     def emit_add(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'ADD {b}, {a}')
 
     def emit_sub(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'SUB {b}, {a}')
 
     def emit_mul(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'MUL {b}, {a}')
 
     def emit_mli(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'MLI {b}, {a}')
 
     def emit_div(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'DIV {b}, {a}')
 
     def emit_dvi(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'DVI {b}, {a}')
 
     def emit_mod(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'MOD {b}, {a}')
 
     def emit_mdi(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'MDI {b}, {a}')
 
     def emit_and(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'AND {b}, {a}')
 
     def emit_bor(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'BOR {b}, {a}')
 
     def emit_xor(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'XOR {b}, {a}')
 
     def emit_shr(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'SHR {b}, {a}')
 
     def emit_asr(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'ASR {b}, {a}')
 
     def emit_shl(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'SHL {b}, {a}')
 
     def emit_ifb(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFB {b}, {a}')
 
     def emit_ifc(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFC {b}, {a}')
 
     def emit_ife(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFE {b}, {a}')
 
     def emit_ifn(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFN {b}, {a}')
 
     def emit_ifg(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFG {b}, {a}')
 
     def emit_ifa(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFA {b}, {a}')
 
     def emit_ifl(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFL {b}, {a}')
 
     def emit_ifu(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'IFU {b}, {a}')
 
     def emit_adx(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'ADX {b}, {a}')
 
     def emit_sbx(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'SBX {b}, {a}')
 
     def emit_sti(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'STI {b}, {a}')
 
     def emit_std(self, b, a):
+        assert b is not None
+        assert a is not None
         self.put_instruction(f'STD {b}, {a}')
 
     def emit_jsr(self, a):
+        assert a is not None
         self.put_instruction(f'JSR {a}')
 
     def emit_int(self, a):
+        assert a is not None
         self.put_instruction(f'INT {a}')
 
     def emit_iag(self, a):
+        assert a is not None
         self.put_instruction(f'IAG {a}')
 
     def emit_ias(self, a):

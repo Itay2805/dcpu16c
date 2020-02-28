@@ -36,7 +36,7 @@ class CInteger(CType):
         return False
 
     def sizeof(self):
-        return self.bits // 8
+        return self.bits // 16
 
     def __str__(self):
         if not self.signed:
@@ -61,7 +61,7 @@ class CPointer(CType):
         self.type = typ
 
     def sizeof(self):
-        return 2
+        return 1
 
     def __eq__(self, other):
         if isinstance(other, CPointer):
@@ -102,7 +102,7 @@ class CFunction(CType):
         self.param_types = []  # type: List[CType]
 
     def sizeof(self):
-        return 2
+        return 1
 
     def __str__(self):
         args = ', '.join(map(str, self.param_types))
@@ -145,24 +145,36 @@ class CStruct(CType):
         super(CStruct, self).__init__()
         self.name = name
         self.packed = 0
+        self.union = False
         self.pos = name_pos
         self.items = {}  # type: Dict[str, CType]
 
     def offsetof(self, name):
-        offset = 0
-        for item in self.items:
-            if item == name:
-                return offset
+        if self.union:
+            return 0
+        else:
+            offset = 0
+            for item in self.items:
+                if item == name:
+                    return offset
 
-            if self.packed:
-                offset += self.items[item].sizeof()
-            else:
-                offset += _align(offset, self.items[item].sizeof()) + self.items[item].sizeof()
+                if self.packed:
+                    offset += self.items[item].sizeof()
+                else:
+                    offset += _align(offset, self.items[item].sizeof()) + self.items[item].sizeof()
+
+            return None
 
     def sizeof(self):
         s = 0
-        for name, typ in self.items:
-            s += typ.sizeof()
+        if self.union:
+            # For union the size is the max size
+            for name in self.items:
+                s = max(self.items[name].sizeof(), s)
+        else:
+            # For struct the size is the su
+            for name in self.items:
+                s += self.items[name].sizeof()
         return s
 
     def is_complete(self):

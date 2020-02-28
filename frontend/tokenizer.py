@@ -1,5 +1,7 @@
 from enum import Enum
 from typing import Tuple
+import traceback
+import sys
 
 
 class UnknownCharacter(Exception):
@@ -135,6 +137,8 @@ class Tokenizer:
 
         print(c + BOLD + RED + '^' + '~' * (pos.end_column - pos.start_column - 1) + RESET)
         print()
+
+        traceback.print_stack(file=sys.stdout)
         exit(-1)
 
     def _inc_stream(self, times=1):

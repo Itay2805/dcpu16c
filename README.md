@@ -68,9 +68,12 @@ this does not affect calling functions which do not implement that because it is
 the current function.
 
 ## Working
+* typedefs 
+* structs and unions
 * Functions (support bot for regcall and stackcall)
 * Variables (only at the start of functions)
+    * register storage class is supported
+* fixed size arrays
 * All of the arithmetic/bitwise operators
 * While and do while loops
 * If/Else (No code gen yet)
-* Stack arrays

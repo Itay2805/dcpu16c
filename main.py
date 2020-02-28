@@ -4,14 +4,21 @@ from frontend.parser import Parser
 from backend.dcpu16.translator import Dcpu16Translator
 
 code = """
-int mul(int _num, int _times) {
-    int register res = 0;
-    int register times = _times;
-    int register num = _num;
-    while(times--) {
-        res += num;
-    }
-    return res;
+typedef union add {
+    struct as_stct {
+        int a;
+        int b;
+    } as_stct;
+    int as_array[2];
+    int a;
+} add_t;
+
+void test() {
+    add_t add;
+    add.as_stct.a = 123;
+    add.as_array[0] = 123;
+    add.a = 123;
+    add.as_array[1] = 123;
 }
 """
 

@@ -1,5 +1,7 @@
 from .tokenizer import *
 from .ast import *
+import traceback
+import sys
 
 
 class Parser(Tokenizer):
@@ -80,15 +82,38 @@ class Parser(Tokenizer):
         return None
 
     def _resolve_type(self, name: List[str] or str or Tuple[str]) -> CType:
+        # Turn to array if needed
         if name is str:
             name = [name]
+
+        # Normalize
         n = list(name)
         n.sort()
         n = tuple(n)
+
+        # Search for it
         for scope in reversed(self._scopes):
             if n in scope.type_defs:
                 return scope.type_defs[n]
+
         return None
+
+    def _type_in_scope(self, name: List[str] or str or Tuple[str]):
+        # Turn to array if needed
+        if name is str:
+            name = [name]
+
+        # Normalize
+        n = list(name)
+        n.sort()
+        n = tuple(n)
+
+        # search for it in the current scope
+        if n in self._scopes[-1].type_defs:
+            return self._scopes[-1].type_defs[n]
+
+        return None
+
 
     def _add_function(self, name: str, typ: CType):
         self.func = Function(name)
@@ -207,6 +232,7 @@ class Parser(Tokenizer):
 
     def report_fatal_error(self, msg: str, pos=None, inside_function=True):
         self.report('error', Parser.RED, msg, pos, inside_function)
+        traceback.print_stack(file=sys.stdout)
         exit(-1)
 
     ####################################################################################################################
@@ -299,7 +325,7 @@ class Parser(Tokenizer):
                 if isinstance(arr_type, CPointer):
                     multiply = arr_type.type.sizeof()
 
-                return ExprDeref(ExprBinary(x, '+', ExprBinary(sub, '*', ExprNumber(multiply))), self._combine_pos(x.pos, temp_pos))
+                x = ExprDeref(ExprBinary(ExprAddrof(x), '+', ExprBinary(sub, '*', ExprNumber(multiply))), self._combine_pos(x.pos, temp_pos))
 
             elif self.match_token('.'):
                 member, mempos = self.expect_ident()
@@ -312,7 +338,25 @@ class Parser(Tokenizer):
                 if member not in typ.items:
                     self.report_fatal_error(f'`{typ}` has no member named `{member}`')
 
-                return ExprDeref(ExprCast(ExprBinary(x, '+', ExprNumber(typ.offsetof(member))), CPointer(typ.items[member])), self._combine_pos(x.pos, mempos))
+                x = ExprDeref(ExprCast(ExprBinary(ExprAddrof(x), '+', ExprNumber(typ.offsetof(member))), CPointer(typ.items[member])), self._combine_pos(x.pos, mempos))
+
+            elif self.match_token('->'):
+                member, mempos = self.expect_ident()
+
+                typ = x.resolve_type(self)
+
+                if not isinstance(typ, CPointer):
+                    self.report_fatal_error(f'invalid type argument of `->` (has `{typ}`)', pos)
+
+                typ = typ.type
+
+                if not isinstance(typ, CStruct):
+                    self.report_fatal_error(f'request for member `{member}` in something not a structure or union', pos)
+
+                if member not in typ.items:
+                    self.report_fatal_error(f'{typ} has not member named `{member}`')
+
+                x = ExprDeref(ExprCast(ExprBinary(ExprAddrof(x), '+', ExprNumber(typ.offsetof(member))), CPointer(typ.items[member])), self._combine_pos(x.pos, mempos))
 
             elif self.match_token('('):
                 args = []
@@ -323,7 +367,7 @@ class Parser(Tokenizer):
                         self.expect_token(',')
                     temp_pos = self.token.pos
 
-                return ExprCall(x, args, self._combine_pos(x.pos, temp_pos))
+                x = ExprCall(x, args, self._combine_pos(x.pos, temp_pos))
 
             else:
                 break
@@ -628,15 +672,56 @@ class Parser(Tokenizer):
             # If has any of these then it is a number
             typ = self._resolve_type(words)
 
-        elif self.match_keyword('struct'):
+        elif self.is_keyword('struct') or self.is_keyword('union'):
+            union = self.is_keyword('union')
+            name_prefix = 'union' if union else 'struct'
+            self.next_token()
             name, pos = self.expect_ident()
-            assert False
+
+            # This will define the struct as we go
+            if self.match_token('{'):
+                # Parse it
+                typ = CStruct(name, pos)
+                typ.union = union
+
+                # While not in the struct definition end
+                while not self.match_token('}'):
+                    field_typ = self._parse_type(True)
+
+                    # Parse the names
+                    while True:
+                        # Parse the name and specific type
+                        cur_typ = self._parse_type_prefix(field_typ)
+                        field_name, field_pos = self.expect_ident()
+                        cur_typ = self._parse_type_postfix(cur_typ, field_pos)
+
+                        # add it
+                        typ.items[field_name] = cur_typ
+
+                        # Check if has next
+                        if self.match_token(';'):
+                            break
+
+                        # expect this
+                        self.expect_token(',')
+
+                if not self._type_in_scope([name_prefix, name]):
+                    # If type is not defined in the current scope add it to the current scope
+                    self._add_typedef([name_prefix, name], typ)
+                else:
+                    # Otherwise error, but keep the current type when doing type checking
+                    self.report_error(f'redefinition of `{name_prefix} {name}`', pos)
+
+            else:
+                # Resolve it
+                typ = self._resolve_type([name_prefix, name])
+                if typ is None:
+                    # Does not exists, create it
+                    typ = CStruct(name, pos)
+                    typ.union = union
+                    self._add_typedef([name_prefix, name], typ)
 
         elif self.match_keyword('enum'):
-            name, pos = self.expect_ident()
-            assert False
-
-        elif self.match_keyword('union'):
             name, pos = self.expect_ident()
             assert False
 
@@ -790,6 +875,7 @@ class Parser(Tokenizer):
     def _parse_func(self, func_name_pos: CodePosition, already_exists: bool):
         # Get the params
         self.expect_token('(')
+        self._push_scope()
 
         i = 0
         got_error = False
@@ -799,6 +885,7 @@ class Parser(Tokenizer):
             nonlocal got_error
 
             typ = self._parse_type(True)
+            typ = self._parse_type_prefix(typ)
             name, pos = self.expect_ident()
 
             if got_error:
@@ -830,8 +917,6 @@ class Parser(Tokenizer):
 
             i += 1
 
-        self._push_scope()
-
         if not self.match_token(')'):
             parse_arg()
             while self.match_token(','):
@@ -861,6 +946,7 @@ class Parser(Tokenizer):
                 # Parse the type, if failed we no longer have variables
                 typ = self._parse_type(False)
                 if typ is None:
+                    self.restore()
                     break
 
                 # Parse the after storage spec
@@ -888,7 +974,7 @@ class Parser(Tokenizer):
                         self.report_error(f'storage size of `{var_name}` isnt known', var_name_pos)
 
                     # Define the variable
-                    new_var = self._def_var(var_name, typ, spec)
+                    new_var = self._def_var(var_name, cur_typ, spec)
                     if new_var is None:
                         self.report_error(f'redefinition of `{var_name}`', var_name_pos)
 
@@ -934,6 +1020,11 @@ class Parser(Tokenizer):
                 else:
                     self._add_typedef(name, typ)
 
+                self.expect_token(';')
+
+            elif self.is_keyword('struct') or self.is_keyword('union') or self.is_keyword('enum'):
+                # Got a definition of something
+                self._parse_type(True)
                 self.expect_token(';')
 
             # Ignore random ;

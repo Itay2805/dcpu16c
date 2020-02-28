@@ -1,6 +1,5 @@
 from frontend.ast import *
 from .assembler import *
-import math
 
 
 class Dcpu16Translator:
@@ -48,8 +47,17 @@ class Dcpu16Translator:
             # These are resolved to a pointer on the stack so we can resolve them to an operand
             if isinstance(typ, CArray) or isinstance(typ, CStruct):
                 return True
+            elif isinstance(expr.ident, VariableIdentifier) and isinstance(self._get_var(expr.ident.index), Reg):
+                # If this is a variable which is inside a register it will not need a deref
+                return True
+            elif isinstance(expr.ident, ParameterIdentifier) and isinstance(self._get_param(expr.ident.index), Reg):
+                # If this is a parameter which is inside a register it will not need a deref
+                return True
             else:
                 return False
+
+        elif isinstance(expr, ExprCast):
+            return self._can_resolve_to_operand_without_deref(expr.expr)
 
         elif isinstance(expr, ExprAddrof):
             return True
@@ -61,6 +69,9 @@ class Dcpu16Translator:
     def _can_resolve_to_operand(self, expr):
         if self._can_resolve_to_operand_without_deref(expr):
             return True
+
+        elif isinstance(expr, ExprCast):
+            return self._can_resolve_to_operand(expr.expr)
 
         elif isinstance(expr, ExprIdent):
             return True
@@ -113,7 +124,7 @@ class Dcpu16Translator:
             self._regs.remove(reg)
 
     def _alloca(self, size):
-        self._stack += math.ceil(size / 2)
+        self._stack += size
         return Offset(Reg.J, -self._stack)
 
     def get_instructions(self):
@@ -142,7 +153,7 @@ class Dcpu16Translator:
             # For stack call all regs are passed on the stack
             off = 1
             for param in func.type.param_types:
-                sz = math.ceil(param.sizeof() / 2)
+                sz = param.sizeof()
                 self._params.append(Offset(Reg.J, off))
                 off += sz
 
@@ -158,7 +169,7 @@ class Dcpu16Translator:
                     self._save_on_regcall.append(r)
                     self._params.append(r)
                 else:
-                    sz = math.ceil(param.sizeof() / 2)
+                    sz = param.sizeof()
                     self._params.append(Offset(Reg.J, off))
                     off += sz
         else:
@@ -195,7 +206,6 @@ class Dcpu16Translator:
 
         # Translate function
         self._translate_expr(func.code, None)
-        end = self._asm.get_pos()
 
         # Push callee saved and allocate stack area
         # also generate the end code that reverts all of that
@@ -264,8 +274,12 @@ class Dcpu16Translator:
                     return Offset(left.a, eval(f'{left.offset} {expr.op} {right}'))
                 elif isinstance(right, Offset) and isinstance(left, int):
                     return Offset(right.a, eval(f'{right.offset} {expr.op} {left}'))
+                elif isinstance(left, Reg) and isinstance(right, int):
+                    return Offset(left, right)
+                elif isinstance(right, Reg) and isinstance(left, int):
+                    return Offset(right, left)
                 else:
-                    assert False
+                    assert False, f'`{left}` and `{right}`'
 
             else:
                 # Translate the left side on the result register
@@ -338,7 +352,7 @@ class Dcpu16Translator:
                         else:
                             return Deref(var)
                 else:
-                    if isinstance(typ, CArray):
+                    if isinstance(typ, CArray) or isinstance(typ, CStruct):
                         self._translate_expr(ExprAddrof(expr), dest)
                     else:
                         if isinstance(var, Reg):
@@ -371,7 +385,7 @@ class Dcpu16Translator:
 
         elif isinstance(expr, ExprCast):
             # For cast just use the expression
-            self._translate_expr(expr.expr, dest)
+            return self._translate_expr(expr.expr, dest)
 
         elif isinstance(expr, ExprCopy):
             tofree = None
@@ -411,52 +425,62 @@ class Dcpu16Translator:
                 assert self._can_resolve_to_operand(expr.expr)
                 return Deref(self._translate_expr(expr.expr, None))
             else:
-                self._translate_expr(expr.expr, dest)
-                self._asm.emit_set(dest, Deref(dest))
+                if self._can_resolve_to_operand(expr.expr):
+                    self._asm.emit_set(dest, Deref(self._translate_expr(expr.expr, None)))
+                else:
+                    self._translate_expr(expr.expr, dest)
+                    self._asm.emit_set(dest, Deref(dest))
 
         elif isinstance(expr, ExprAddrof):
-            ident = expr.expr.ident
-            r = None
-            if isinstance(ident, VariableIdentifier):
-                # The variable
-                r = self._get_var(ident.index)
-            elif isinstance(ident, ParameterIdentifier):
-                # TODO: Support address of parameter in a reg call (probably by spilling it)
-                assert not isinstance(self._get_param(ident.index), Reg)
-                r = self._get_param(ident.index)
-            else:
-                assert False
+            if isinstance(expr.expr, ExprIdent):
+                ident = expr.expr.ident
+                r = None
+                if isinstance(ident, VariableIdentifier):
+                    # The variable
+                    r = self._get_var(ident.index)
+                elif isinstance(ident, ParameterIdentifier):
+                    # TODO: Support address of parameter in a reg call (probably by spilling it)
+                    assert not isinstance(self._get_param(ident.index), Reg)
+                    r = self._get_param(ident.index)
+                else:
+                    assert False
 
-            if isinstance(r, Offset):
-                self._asm.emit_set(dest, r.a)
-                if r.offset == 0:
-                    pass
-                elif r.offset > 0:
-                    self._asm.emit_add(dest, r.offset)
-                elif r.offset < 0:
-                    self._asm.emit_sub(dest, -r.offset)
+                if dest is not None:
+                    if isinstance(r, Offset):
+                        self._asm.emit_set(dest, r.a)
+                        if r.offset == 0:
+                            pass
+                        elif r.offset > 0:
+                            self._asm.emit_add(dest, r.offset)
+                        elif r.offset < 0:
+                            self._asm.emit_sub(dest, -r.offset)
+                    else:
+                        assert False, type(r)
+                else:
+                    return r
             else:
-                assert False, type(r)
+                assert False, f'`{expr}` ({type(expr)})'
 
         elif isinstance(expr, ExprReturn):
             assert dest is None, "Can not have a destination for ExprReturn"
             # The return value is always in A
-            if Reg.A in self._regs:
-                # If a is free use it directly
+            if self._can_resolve_to_operand(expr.expr):
+                # Check if can be resolved to an operand, if so read it directly
+                # if already A then the set will be emitted by the assembler
+                self._asm.emit_set(Reg.A, self._translate_expr(expr.expr, None))
+
+            elif Reg.A in self._regs:
+                # If A is free use it directly
                 self._set_scratch(Reg.A)
                 self._translate_expr(expr.expr, Reg.A)
+
             else:
-                if self._can_resolve_to_operand(expr.expr) and self._translate_expr(expr.expr, None) == Reg.A:
-                    # check if by any chance this expression resolves to A already
-                    # if so no need to do anything
-                    pass
-                else:
-                    # otherwise allocate a scratch and then move it to A
-                    # at the end
-                    reg = self._alloc_scratch()
-                    self._translate_expr(expr.expr, reg)
-                    self._free_scratch(reg)
-                    self._asm.emit_set(Reg.A, reg)
+                # otherwise allocate a scratch and then move it to A
+                # at the end
+                reg = self._alloc_scratch()
+                self._translate_expr(expr.expr, reg)
+                self._free_scratch(reg)
+                self._asm.emit_set(Reg.A, reg)
 
             # emit the function ending
             self._return_pos.append(self._asm.get_pos())

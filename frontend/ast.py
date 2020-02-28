@@ -200,16 +200,15 @@ class ExprLoop(Expr):
 class ExprAddrof(Expr):
 
     def __init__(self, expr: ExprIdent, pos=None):
-        assert isinstance(expr, ExprIdent)
         self.pos = pos
         self.expr = expr
-        self.ident = expr.ident
 
     def resolve_type(self, ast):
         typ = self.expr.resolve_type(ast)
-        # &func == func
         if isinstance(typ, CFunction):
             return typ
+        elif isinstance(typ, CArray):
+            return CPointer(typ.type)
         else:
             return CPointer(typ)
 
