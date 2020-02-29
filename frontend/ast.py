@@ -197,6 +197,30 @@ class ExprLoop(Expr):
         return ident + f'(loop {self.cond} {self.body})'
 
 
+class ExprBreak(Expr):
+
+    def __init__(self, pos=None):
+        self.pos = pos
+
+    def is_pure(self, parser):
+        return False
+
+    def __str__(self, ident=''):
+        return ident + f'(break)'
+
+
+class ExprContinue(Expr):
+
+    def __init__(self, pos=None):
+        self.pos = pos
+
+    def is_pure(self, parser):
+        return False
+
+    def __str__(self, ident=''):
+        return ident + f'(continue)'
+
+
 class ExprAddrof(Expr):
 
     def __init__(self, expr: ExprIdent, pos=None):

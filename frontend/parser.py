@@ -36,6 +36,7 @@ class Parser(Tokenizer):
         self._add_typedef(['unsigned', 'long'], CInteger(32, False))
 
         self._temp_counter = 0
+        self._loop_nesting = 0
         self.got_errors = False
 
         # Start the parsing
@@ -832,6 +833,22 @@ class Parser(Tokenizer):
             else:
                 return ExprBinary(x, "&&", y)
 
+        elif self.match_keyword('break'):
+            if self._loop_nesting == 0:
+                self.report_error('break statement not within loop or switch', pos)
+
+            e = ExprBreak(pos)
+            self.expect_token(';')
+            return e
+
+        elif self.match_keyword('continue'):
+            if self._loop_nesting == 0:
+                self.report_error('continue statement not within a loop', pos)
+
+            e = ExprContinue(pos)
+            self.expect_token(';')
+            return e
+
         elif self.match_keyword('for'):
             assert False
 
@@ -839,17 +856,21 @@ class Parser(Tokenizer):
             self.expect_token('(')
             cond = self._parse_expr()
             self.expect_token(')')
+            self._loop_nesting += 1
             body = self._parse_stmt()
+            self._loop_nesting -= 1
             return ExprLoop(cond, body, self._combine_pos(pos, body.pos))
 
         elif self.match_keyword('do'):
-            body = self._parse_stmt()
-            self.expect_keyword('while')
-            self.expect_token('(')
-            cond = self._parse_expr()
-            temp_pos = self.token.pos
-            self.expect_token(')')
-            return ExprComma(self._combine_pos(pos, temp_pos)).add(body).add(ExprLoop(cond, body))
+            # body = self._parse_stmt()
+            # self.expect_keyword('while')
+            # self.expect_token('(')
+            # cond = self._parse_expr()
+            # temp_pos = self.token.pos
+            # self.expect_token(')')
+            # # TODO: This will not result in that efficient code gen tbh, we could probably do it better somehow
+            # return ExprComma(self._combine_pos(pos, temp_pos)).add(body).add(ExprLoop(cond, body))
+            pass
 
         elif self.match_keyword('switch'):
             assert False

@@ -70,10 +70,14 @@ calling convention is `__stackcall`.
 ## Working
 * typedefs 
 * structs and unions
-* Functions (support bot for regcall and stackcall)
+    * can be nested
+    * still no support for anonymous structs/unions
+    * still no support for packed structs
+* Functions and function calls (support bot for regcall and stackcall)
+    * regcall call is still wip 
 * Variables (only at the start of functions)
     * register storage class is supported
 * fixed size arrays
 * All of the arithmetic/bitwise operators
-* While and do while loops
-* If/Else (No code gen yet)
+* While loops with break and continue
+* if/else (No code gen yet)

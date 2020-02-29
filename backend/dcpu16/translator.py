@@ -23,6 +23,10 @@ class Dcpu16Translator:
         self._params = []
         self._vars = []
 
+        # For break and continue
+        self._cond_label = []
+        self._end_label = []
+
     def clear(self):
         """
         Clear the compilation state
@@ -249,13 +253,21 @@ class Dcpu16Translator:
             else:
                 self._asm.emit_set(dest, expr.value)
 
+        elif isinstance(expr, ExprBreak):
+            self._asm.emit_set(Reg.PC, self._end_label[-1])
+
+        elif isinstance(expr, ExprContinue):
+            self._asm.emit_set(Reg.PC, self._cond_label[-1])
+
         elif isinstance(expr, ExprLoop):
             assert dest is None
 
             end_lbl = self._asm.make_label()
+            self._end_label.append(end_lbl)
 
             # The condition
             cond_lbl = self._asm.make_and_mark_label()
+            self._cond_label.append(cond_lbl)
             if self._can_resolve_to_operand(expr.cond):
                 cond_result = self._translate_expr(expr.cond, None)
             else:

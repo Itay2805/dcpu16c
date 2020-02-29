@@ -10,7 +10,7 @@ int add(int a, int b) {
 
 void test() {
     int a;
-    add(&a, 5);
+    break;
 }
 """
 
@@ -24,7 +24,8 @@ print(code)
 #
 p = Parser(code)
 p.parse()
-assert not p.got_errors
+if p.got_errors:
+    exit(-1)
 
 print()
 print("============================")
