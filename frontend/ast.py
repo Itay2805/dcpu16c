@@ -114,7 +114,7 @@ class ExprIdent(Expr):
         if isinstance(self.ident, VariableIdentifier):
             return ast.func.vars[self.ident.index].typ
         elif isinstance(self.ident, FunctionIdentifier):
-            return ast.func_list[self.ident.index]
+            return ast.func_list[self.ident.index].type
         elif isinstance(self.ident, ParameterIdentifier):
             return ast.func.type.param_types[self.ident.index]
         else:
@@ -256,9 +256,8 @@ class ExprCall(Expr):
 
     def resolve_type(self, ast):
         func = self.func.resolve_type(ast)
-        assert isinstance(func, CPointer)
-        assert isinstance(func.type, CFunction)
-        return func.type.ret_type
+        assert isinstance(func, CFunction), f'{type(func)}'
+        return func.ret_type
 
     def is_pure(self, parser):
         if isinstance(self.func, ExprIdent) and isinstance(self.func.ident, FunctionIdentifier):

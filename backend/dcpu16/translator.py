@@ -479,6 +479,45 @@ class Dcpu16Translator:
             else:
                 assert False, f'`{expr}` ({type(expr)})'
 
+        elif isinstance(expr, ExprCall):
+            # TODO: Need the callconv to be part of the type
+            callconv = 'stackcall'
+
+            if callconv == 'stackcall':
+                # place the arguments for a stackcall
+                # they are pushed in a reversed order
+                for arg in expr.args[::-1]:
+                    assert arg.resolve_type(self._ast).sizeof() == 1
+                    if self._can_resolve_to_operand(arg):
+                        self._asm.emit_set(Push(), self._translate_expr(arg, None))
+                    else:
+                        # We don't want to set the dest to Push since we might use it in
+                        # some other places along the way, making the stack corrupt
+                        self._translate_expr(arg, dest)
+                        self._asm.emit_set(Push(), dest)
+            else:
+                assert False
+
+            # Translate the function into a call properly
+            if self._can_resolve_to_operand(expr.func):
+                self._asm.emit_jsr(self._translate_expr(expr.func, None))
+            else:
+                if callconv == 'stackcall' or callconv == 'regcall' and dest not in [Reg.A, Reg.B, Reg.C]:
+                    # If we can use the dest safely then use it to resolve our function
+                    self._translate_expr(expr.func, dest)
+                    self._asm.emit_jsr(dest)
+
+            # return value is in A
+            self._asm.emit_set(dest, Reg.A)
+
+            # restore everything
+            if callconv == 'stackcall':
+                self._asm.emit_add(Reg.SP, len(expr.args))
+            elif callconv == 'regcall':
+                if len(expr.args) > 3:
+                    # only need to restore if more than 3 arguments
+                    self._asm.emit_add(Reg.SP, (len(expr.args) - 3) - 3)
+
         elif isinstance(expr, ExprReturn):
             assert dest is None, "Can not have a destination for ExprReturn"
             # The return value is always in A

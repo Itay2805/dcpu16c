@@ -54,7 +54,7 @@ class Optimizer:
                     # assume indirect function calls have side effects
                     if not isinstance(expr.func, ExprIdent) or not isinstance(expr.func.ident, FunctionIdentifier):
                         return True
-                    func = self.func_list[expr.func.ident.index]
+                    func = self.parser.func_list[expr.func.ident.index]
 
                     # This function has side effects
                     if func.pure_known and not func.pure:
