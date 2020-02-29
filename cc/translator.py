@@ -1,8 +1,9 @@
-from frontend.ast import *
+from cc.ast import *
+from cc.parser import Parser
 from .assembler import *
 
 
-class Dcpu16Translator:
+class Translator:
     """
     Will translate the AST into DCPU16 code
 
@@ -11,7 +12,7 @@ class Dcpu16Translator:
     """
 
     def __init__(self, ast):
-        self._ast = ast
+        self._ast = ast  # type: Parser
         self._asm = Assembler()
 
         # Function compilation state
@@ -154,16 +155,30 @@ class Dcpu16Translator:
 
     def translate(self):
         for func in self._ast.func_list:
-            self._translate_function(func)
+            if func.prototype:
+                # Declare as an external symbol
+                self._asm.put_instruction(f'.extern {func.name}')
+            else:
+                self._translate_function(func)
+
+        for var in self._ast.global_vars:
+            # TODO: support constant value for global vars
+            if var.storage != StorageClass.STATIC:
+                # Declare as a global symbol if not a static variable
+                self._asm.put_instruction(f'.global {var.ident.name}')
+            self._asm.mark_label(f'{var.ident.name}')
+            self._asm.emit_word(0)
 
     def _translate_function(self, func: Function):
+        # TODO: static functions
+
         # Clear and set the current function
         self.clear()
         self._ast.func = func
 
         # label
         self._asm.put_instruction('')
-        self._asm.put_instruction('')
+        self._asm.put_instruction(f'.global {func.name}')
         self._asm.mark_label(func.name)
 
         # Function entry frame
@@ -188,7 +203,6 @@ class Dcpu16Translator:
                 if len(regs) != 0:
                     r = regs.pop()
                     self._set_scratch(r)
-                    self._save_on_regcall.append(r)
                     self._params.append(r)
                 else:
                     sz = param.sizeof()

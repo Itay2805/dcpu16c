@@ -1,6 +1,5 @@
 from .tokenizer import *
 from .ast import *
-import traceback
 import sys
 
 
@@ -16,6 +15,7 @@ class Parser(Tokenizer):
         super().__init__(stream, filename)
         self._scopes = []  # type: List[Parser.Scope]
         self.func_list = []  # type: List[Function]
+        self.global_vars = []  # type: List[Variable]
         self.func = None  # type: Function
 
         # Setup the global scope with all the default types
@@ -56,7 +56,13 @@ class Parser(Tokenizer):
         ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
         if ret is None:
             return None
-        self.func.vars.append(Variable(ret.ident, typ, storage))
+        var = Variable(ret.ident, typ, storage)
+        if self.func is not None:
+            self.func.vars.append(var)
+            if storage == StorageClass.STATIC:
+                self.global_vars.append(var)
+        else:
+            self.global_vars.append(var)
         return ret
 
     def _def_param(self, name, typ) -> ExprIdent:
@@ -235,7 +241,6 @@ class Parser(Tokenizer):
 
     def report_fatal_error(self, msg: str, pos=None, inside_function=True):
         self.report('error', Parser.RED, msg, pos, inside_function)
-        traceback.print_stack(file=sys.stdout)
         exit(-1)
 
     ####################################################################################################################
@@ -659,8 +664,7 @@ class Parser(Tokenizer):
     # Type parsing
     ####################################################################################################################
 
-    def _parse_storage_decl(self):
-        spec = StorageClass.AUTO
+    def _parse_storage_decl(self, spec):
         while True:
             if self.match_keyword('register'):
                 if spec != StorageClass.AUTO:
@@ -978,7 +982,7 @@ class Parser(Tokenizer):
                 self.save()
 
                 # Parse the storage before
-                spec = self._parse_storage_decl()
+                spec = self._parse_storage_decl(StorageClass.AUTO)
                 pos = self.token.pos
 
                 # Parse the type, if failed we no longer have variables
@@ -988,13 +992,7 @@ class Parser(Tokenizer):
                     break
 
                 # Parse the after storage spec
-                spec2 = self._parse_storage_decl()
-
-                # Combine specs
-                if spec != StorageClass.AUTO and spec2 != StorageClass.AUTO:
-                    self.report_error('multiple storage classes in declaration specifiers', pos)
-                elif spec == StorageClass.AUTO and spec2 != StorageClass.AUTO:
-                    spec = spec2
+                spec = self._parse_storage_decl(spec)
 
                 # we can discard of the save because we def have a variable
                 self.discard()
@@ -1047,6 +1045,17 @@ class Parser(Tokenizer):
 
         self._pop_scope()
 
+    def _parse_global_variable(self, typ: CType, storage: StorageClass):
+        storage = self._parse_storage_decl(storage)
+
+        typ = self._parse_type_prefix(typ)
+        name, name_pos = self.expect_ident()
+        typ = self._parse_type_postfix(typ, name_pos)
+
+        self._def_var(name, typ, storage)
+
+        self.expect_token(';')
+
     def parse(self):
         while not self.is_token(EofToken):
             if self.match_keyword('typedef'):
@@ -1060,14 +1069,14 @@ class Parser(Tokenizer):
 
                 self.expect_token(';')
 
-            elif self.is_keyword('struct') or self.is_keyword('union') or self.is_keyword('enum'):
-                # Got a definition of something
-                self._parse_type(True)
-                self.expect_token(';')
-
             # Ignore random ;
             elif self.match_token(';'):
                 pass
+
+            elif self.match_keyword('static'):
+                # this is a variable with a static
+                typ = self._parse_type(True)
+                self._parse_global_variable(typ, StorageClass.STATIC)
 
             # Either a global or a function
             else:
@@ -1117,9 +1126,7 @@ class Parser(Tokenizer):
                     self._parse_func(name_pos, e is None)
 
                 else:
-                    pass
+                    typ = self._parse_type(True)
 
-
-
-
-
+                    if not self.match_token(';'):
+                        self._parse_global_variable(typ, StorageClass.AUTO)

@@ -1,58 +1,39 @@
-from frontend.optimizer import Optimizer
-from frontend.parser import Parser
+#!/usr/bin/python3
 
-from backend.dcpu16.translator import Dcpu16Translator
+from cc.parser import Parser
+from cc.optimizer import Optimizer
+from cc.translator import Translator
 
-code = """
-int add(int a, int b) {
-    return a + b;
-}
+import sys
 
-void test() {
-    int a;
-    break;
-}
-"""
+if __name__ == '__main__':
+    c_files = []
+    asm_files = []
 
-print("============================")
-print(" Code ")
-print("============================")
-print(code)
+    stop_at_comp = False
 
-#
-# Parse the code
-#
-p = Parser(code)
-p.parse()
-if p.got_errors:
-    exit(-1)
+    for file in sys.argv:
+        if file.endswith('.c'):
+            c_files.append(file)
+        elif file.endswith('.asm'):
+            asm_files.append(file)
+        elif file == '-S':
+            stop_at_comp = True
 
-print()
-print("============================")
-print(" AST ")
-print("============================")
-print('\n\n'.join(map(str, p.func_list)))
+    for cf in c_files:
+        with open(cf, 'r') as f:
+            code = f.read()
 
-#
-# Optimize the AST
-#
-opt = Optimizer(p)
-opt.optimize()
+        p = Parser(code, filename=cf)
+        p.parse()
 
-print()
-print("============================")
-print(" Optimized AST ")
-print("============================")
-print('\n\n'.join(map(str, p.func_list)))
+        opt = Optimizer(p)
+        opt.optimize()
 
-#
-# Translate it to assembler
-#
-trans = Dcpu16Translator(p)
-trans.translate()
+        trans = Translator(p)
+        trans.translate()
 
-print()
-print("============================")
-print(" Assembly ")
-print("============================")
-print('\n'.join(trans.get_instructions()))
+        insts = trans.get_instructions()
+
+        print('\n'.join(insts))
+

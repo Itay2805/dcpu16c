@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, auto
 
 
 class Reg(Enum):
@@ -84,15 +84,23 @@ class Assembler:
     def make_label(self):
         id = self._lbl_id_gen
         self._lbl_id_gen += 1
-        return f'L{id}'
+        return f'_l{id}'
 
     def mark_label(self, lbl):
-        self.put_instruction(f':{lbl}')
+        self.put_instruction(f'{lbl}:')
 
     def make_and_mark_label(self):
         lbl = self.make_label()
         self.mark_label(lbl)
         return lbl
+
+    def emit_word(self, word):
+        if isinstance(word, list):
+            word = ', '.join(word)
+        self.put_instruction(f'.dw {word}')
+
+    def emit_string(self, str):
+        self.put_instruction(f'.ascii z{repr(str)}')
 
     def emit_set(self, b, a):
         if str(a) == str(b):
