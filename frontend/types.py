@@ -94,10 +94,17 @@ class CVoid(CType):
         return False
 
 
+class CallConv(Enum):
+    STACKCALL = auto()
+    REGCALL = auto()
+    INTERRUPT = auto()
+
+
 class CFunction(CType):
 
     def __init__(self):
         super(CFunction, self).__init__()
+        self.callconv = None
         self.ret_type = CVoid()  # type: CType
         self.param_types = []  # type: List[CType]
 

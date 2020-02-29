@@ -367,7 +367,6 @@ class Variable:
 class Function:
 
     def __init__(self, name: str):
-        self.calling_conv = None
         self.name = name
         self.code = None
         self.num_params = 0

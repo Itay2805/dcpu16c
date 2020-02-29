@@ -9,7 +9,8 @@ int add(int a, int b) {
 }
 
 void test() {
-    int a = add(5, 6);
+    int a;
+    add(&a, 5);
 }
 """
 

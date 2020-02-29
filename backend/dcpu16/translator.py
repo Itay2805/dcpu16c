@@ -17,7 +17,7 @@ class Dcpu16Translator:
         # Function compilation state
         self._regs = [Reg.I, Reg.Z, Reg.Y, Reg.X, Reg.C, Reg.B, Reg.A]
         self._to_restore = []
-        self._save_on_regcall = []
+        self._save_on_call = []
         self._return_pos = []
         self._stack = 0
         self._params = []
@@ -29,7 +29,7 @@ class Dcpu16Translator:
         """
         self._regs = [Reg.I, Reg.Z, Reg.Y, Reg.X, Reg.C, Reg.B, Reg.A]
         self._to_restore.clear()
-        self._save_on_regcall.clear()
+        self._save_on_call.clear()
         self._return_pos.clear()
         self._stack = 0
         self._params.clear()
@@ -117,8 +117,8 @@ class Dcpu16Translator:
             reg = self._regs.pop()
             if reg in [Reg.J, Reg.Z, Reg.Y, Reg.X] and reg not in self._to_restore:
                 self._to_restore.append(reg)
-            if reg in [Reg.A, Reg.B, Reg.C] and reg not in self._save_on_regcall:
-                self._save_on_regcall.append(reg)
+            if reg in [Reg.A, Reg.B, Reg.C] and reg not in self._save_on_call:
+                self._save_on_call.append(reg)
             return reg
 
     def _free_scratch(self, reg: Reg):
@@ -132,8 +132,8 @@ class Dcpu16Translator:
             self._regs.append(reg)
 
             # Remove from caller saved registers if in it
-            if reg in self._save_on_regcall:
-                self._save_on_regcall.remove(reg)
+            if reg in self._save_on_call:
+                self._save_on_call.remove(reg)
 
     def _set_scratch(self, reg: Reg):
         # force uses are not put in the restore or save on regcall
@@ -167,7 +167,7 @@ class Dcpu16Translator:
         self._asm.emit_set(Reg.J, Reg.SP)
 
         # setup function argument position
-        if func.calling_conv == 'stackcall':
+        if func.type.callconv == CallConv.STACKCALL:
             # For stack call all regs are passed on the stack
             off = 1
             for param in func.type.param_types:
@@ -175,7 +175,7 @@ class Dcpu16Translator:
                 self._params.append(Offset(Reg.J, off))
                 off += sz
 
-        elif func.calling_conv == 'regcall':
+        elif func.type.callconv == CallConv.REGCALL:
             # For regcall the first free parameters are in A, B and C
             # The rest are passed on the stack
             regs = [Reg.C, Reg.B, Reg.A]
@@ -481,9 +481,14 @@ class Dcpu16Translator:
 
         elif isinstance(expr, ExprCall):
             # TODO: Need the callconv to be part of the type
-            callconv = 'stackcall'
+            callconv = expr.func.resolve_type(self._ast).callconv
 
-            if callconv == 'stackcall':
+            # save the values of A, B and C
+            # TODO: need to save it if in arguments or variables properly
+            for reg in self._save_on_call:
+                self._asm.emit_set(Push(), reg)
+
+            if callconv == CallConv.STACKCALL:
                 # place the arguments for a stackcall
                 # they are pushed in a reversed order
                 for arg in expr.args[::-1]:
@@ -502,7 +507,7 @@ class Dcpu16Translator:
             if self._can_resolve_to_operand(expr.func):
                 self._asm.emit_jsr(self._translate_expr(expr.func, None))
             else:
-                if callconv == 'stackcall' or callconv == 'regcall' and dest not in [Reg.A, Reg.B, Reg.C]:
+                if callconv == CallConv.STACKCALL or callconv == CallConv.REGCALL and dest not in [Reg.A, Reg.B, Reg.C]:
                     # If we can use the dest safely then use it to resolve our function
                     self._translate_expr(expr.func, dest)
                     self._asm.emit_jsr(dest)
@@ -511,12 +516,17 @@ class Dcpu16Translator:
             self._asm.emit_set(dest, Reg.A)
 
             # restore everything
-            if callconv == 'stackcall':
+            if callconv == CallConv.STACKCALL:
                 self._asm.emit_add(Reg.SP, len(expr.args))
-            elif callconv == 'regcall':
+            elif callconv == CallConv.REGCALL:
                 if len(expr.args) > 3:
                     # only need to restore if more than 3 arguments
                     self._asm.emit_add(Reg.SP, (len(expr.args) - 3) - 3)
+
+            # restore the values of A, B and C
+            # TODO: need to save it if in arguments or variables properly
+            for reg in self._save_on_call[::-1]:
+                self._asm.emit_set(reg, Pop())
 
         elif isinstance(expr, ExprReturn):
             assert dest is None, "Can not have a destination for ExprReturn"

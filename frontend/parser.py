@@ -141,11 +141,13 @@ class Parser(Tokenizer):
 
     def _check_assignment(self, e1: Expr or CType, e2: Expr or CType, action: str):
         if isinstance(e1, Expr):
+            pos1 = e1.pos
             t1 = e1.resolve_type(self)
         else:
             t1 = e1
 
         if isinstance(e2, Expr):
+            pos2 = e2.pos
             t2 = e2.resolve_type(self)
         else:
             t2 = e2
@@ -366,6 +368,21 @@ class Parser(Tokenizer):
                     if not self.is_token(')'):
                         self.expect_token(',')
                     temp_pos = self.token.pos
+
+                typ = x.resolve_type(self)
+                if not isinstance(typ, CFunction):
+                    self.report_fatal_error(f'called object `{x}` is not a function or function pointer', x.pos)
+
+                if len(args) < len(typ.param_types):
+                    self.report_error(f'too few arguments to function `{x}`', x.pos)
+
+                if len(args) > len(typ.param_types):
+                    self.report_error(f'too many arguments to function `{x}`', x.pos)
+
+                for i in range(len(typ.param_types)):
+                    arg = args[i]
+                    t = typ.param_types[i]
+                    self._check_assignment(t, arg, 'passing argument')
 
                 x = ExprCall(x, args, self._combine_pos(x.pos, temp_pos))
 
@@ -1049,10 +1066,13 @@ class Parser(Tokenizer):
                     ret_typ = self._parse_type(True)
 
                     # Parse the calling convention
-                    callconv = None
-                    if self.is_keyword('__stackcall') or self.is_keyword('__regcall'):
-                        callconv = self.token.value[2:]
-                        self.next_token()
+                    callconv = CallConv.STACKCALL
+                    if self.match_keyword('__stackcall'):
+                        callconv = CallConv.STACKCALL
+                    elif self.match_keyword('__regcall'):
+                        callconv = CallConv.REGCALL
+                    elif self.match_keyword('__interrupt'):
+                        callconv = CallConv.INTERRUPT
 
                     name, name_pos = self.expect_ident()
 
@@ -1068,12 +1088,10 @@ class Parser(Tokenizer):
                             self.report_fatal_error(f'conflicting types for `{self.func.name}`', name_pos, False)
 
                     # Handle setting the calling conv
-                    if self.func.calling_conv is None:
-                        if callconv is None:
-                            callconv = 'stackcall'
-                        self.func.calling_conv = callconv
+                    if self.func.type.callconv is None:
+                        self.func.type.callconv = callconv
                     elif callconv is not None:
-                        assert callconv == self.func.calling_conv
+                        assert callconv == self.func.type.callconv
 
                     self._parse_func(name_pos, e is None)
 

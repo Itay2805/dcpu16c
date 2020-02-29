@@ -120,12 +120,12 @@ class Optimizer:
                 else:
                     # inside statements we only append non-pure nodes
                     if stmt:
-                        if not e.is_pure(self):
+                        if not e.is_pure(self.parser):
                             new_exprs.append(e)
 
                     # Outside of that only add non-pure and the last element
                     else:
-                        if not e.is_pure(self) or i == len(expr.exprs) - 1:
+                        if not e.is_pure(self.parser) or i == len(expr.exprs) - 1:
                             new_exprs.append(e)
 
             if len(new_exprs) == 0:

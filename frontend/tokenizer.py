@@ -342,6 +342,7 @@ class Tokenizer:
 
                 '__regcall',
                 '__stackcall',
+                '__interrupt'
             ]:
                 self.token = KeywordToken(pos, value)
             else:
