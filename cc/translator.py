@@ -7,7 +7,7 @@ class Translator:
     """
     Will translate the AST into DCPU16 code
 
-    We use the ABI as specified here:
+    We use the ABI asm specified here:
     https://github.com/0x10cStandardsCommittee/0x10c-Standards/blob/master/ABI/ABI%20draft%202.txt
     """
 
@@ -156,7 +156,7 @@ class Translator:
     def translate(self):
         for func in self._ast.func_list:
             if func.prototype:
-                # Declare as an external symbol
+                # Declare asm an external symbol
                 self._asm.put_instruction(f'.extern {func.name}')
             else:
                 self._translate_function(func)
@@ -164,7 +164,7 @@ class Translator:
         for var in self._ast.global_vars:
             # TODO: support constant value for global vars
             if var.storage != StorageClass.STATIC:
-                # Declare as a global symbol if not a static variable
+                # Declare asm a global symbol if not a static variable
                 self._asm.put_instruction(f'.global {var.ident.name}')
             self._asm.mark_label(f'{var.ident.name}')
             self._asm.emit_word(0)
@@ -336,7 +336,7 @@ class Translator:
                     reg = self._alloc_scratch()
                     self._translate_expr(expr.right, reg)
 
-                # Emit the addition, with dest as the destination
+                # Emit the addition, with dest asm the destination
                 if expr.op == '+':
                     self._asm.emit_add(dest, reg)
                 elif expr.op == '-':

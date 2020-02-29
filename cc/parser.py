@@ -299,7 +299,7 @@ class Parser(Tokenizer):
 
                 if not self._is_lvalue(x):
                     s = 'increment' if op == '+' else 'decrement'
-                    self.report_error(f'lvalue required as {s} operand', pos)
+                    self.report_error(f'lvalue required asm {s} operand', pos)
 
                 self._check_binary_op(op, pos, x, ExprNumber(1, CInteger(16, False)))
 
@@ -405,7 +405,7 @@ class Parser(Tokenizer):
             e = self._parse_prefix()
             if not self._is_lvalue(e):
                 self.token.pos = pos
-                self.report_error('lvalue required as unary `&` operand')
+                self.report_error('lvalue required asm unary `&` operand')
             return ExprAddrof(e, self._combine_pos(pos, e.pos))
 
         elif self.match_token('*'):
@@ -448,7 +448,7 @@ class Parser(Tokenizer):
 
             if not self._is_lvalue(e):
                 s = 'decrement' if op == '-' else 'increment'
-                self.report_error(f'lvalue required as {s} operand', pos)
+                self.report_error(f'lvalue required asm {s} operand', pos)
 
             if e.is_pure(self):
                 return ExprCopy(ExprBinary(e, op, ExprNumber(1)), e)
@@ -626,7 +626,7 @@ class Parser(Tokenizer):
             pos = self.token.pos
 
             if not self._is_lvalue(x):
-                self.report_error('lvalue required as left operand of assignment', pos)
+                self.report_error('lvalue required asm left operand of assignment', pos)
 
             self.next_token()
             y = self._parse_assignment()
@@ -700,7 +700,7 @@ class Parser(Tokenizer):
             self.next_token()
             name, pos = self.expect_ident()
 
-            # This will define the struct as we go
+            # This will define the struct asm we go
             if self.match_token('{'):
                 # Parse it
                 typ = CStruct(name, pos)
@@ -916,54 +916,46 @@ class Parser(Tokenizer):
 
     def _parse_func(self, func_name_pos: CodePosition, already_exists: bool):
         # Get the params
-        self.expect_token('(')
         self._push_scope()
 
         i = 0
-        got_error = False
-
-        def parse_arg():
-            nonlocal i
-            nonlocal got_error
-
-            typ = self._parse_type(True)
-            typ = self._parse_type_prefix(typ)
-            name, pos = self.expect_ident()
-
-            if got_error:
-                return
-
-            # Only do these stuff if the function does not exists already
-            if not already_exists:
-                if not typ.is_complete():
-                    self.report_error(f'parameter {self.func.num_params + 1} (`{name}`) has incomplete type', pos, False)
-
-                if self._def_param(name, typ) is None:
-                    self.report_error(f'redefinition of `{name}`', pos, False)
-            else:
-                if not got_error:
-                    # TODO: For now I do a fatal error because otherwise it will use the types of the prototype
-                    #       which means the types will not be correct for this function anyways making a bunch
-                    #       of useless errors...
-                    if len(self.func.type.arg_types) <= i:
-                        self.report_fatal_error(f'number of arguments doesnt match prototype', func_name_pos, False)
-                        got_error = True
-
-                    elif typ != self.func.type.arg_types[i]:
-                        self.report_fatal_error(f'conflicting types for `{self.func.name}`', func_name_pos, False)
-                        got_error = True
-
-                # Add the correct symbol to the scope
-                if self._define(name, ParameterIdentifier(name, i)) is None:
-                    self.report_error(f'redefinition of `{name}`', pos, False)
-
-            i += 1
-
+        self.expect_token('(')
         if not self.match_token(')'):
-            parse_arg()
-            while self.match_token(','):
-                parse_arg()
-            self.expect_token(')')
+            while True:
+
+                # Parse it
+                typ = self._parse_type(True)
+                self._parse_type_prefix(typ)
+                pname, ppos = self.expect_ident()
+
+                if already_exists:
+                    if i > self.func.num_params:
+                        self.report_fatal_error(f'number of arguments doesnt match prototype', func_name_pos, False)
+
+                    # Just check arguments are the same
+                    if typ != self.func.type.param_types[i]:
+                        self.report_fatal_error(f'conflicting types for `{self.func.name}`', func_name_pos, False)
+
+                    self._define(pname, ParameterIdentifier(pname, i))
+
+                else:
+                    # Check if the type is complete
+                    if not typ.is_complete():
+                        self.report_error(f'parameter {self.func.num_params + 1} (`{pname}`) has incomplete type', ppos, True)
+
+                    # Define the parameter
+                    if self._def_param(pname, typ) is None:
+                        self.report_error(f'redefinition of `{pname}`', ppos, True)
+
+                i += 1
+
+                if self.match_token(')'):
+                    break
+
+                self.expect_token(',')
+
+        if already_exists and i != len(self.func.type.param_types):
+            self.report_fatal_error(f'number of arguments doesnt match prototype', func_name_pos, False)
 
         # Has a body
         if self.match_token('{'):
@@ -1107,7 +1099,7 @@ class Parser(Tokenizer):
                     name, name_pos = self.expect_ident()
 
                     if isinstance(ret_typ, CArray):
-                        self.report_error(f'`{name}` declared as function returning an array', name_pos)
+                        self.report_error(f'`{name}` declared asm function returning an array', name_pos)
 
                     e = self._def_fun(name)
                     if e is not None:
@@ -1116,6 +1108,7 @@ class Parser(Tokenizer):
                     else:
                         if self.func.type.ret_type != ret_typ:
                             self.report_fatal_error(f'conflicting types for `{self.func.name}`', name_pos, False)
+                        self.func = self.func_list[self._use(name).ident.index]
 
                     # Handle setting the calling conv
                     if self.func.type.callconv is None:

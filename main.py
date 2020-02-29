@@ -4,6 +4,8 @@ from cc.parser import Parser
 from cc.optimizer import Optimizer
 from cc.translator import Translator
 
+from asm.assembler import Assembler
+
 import sys
 
 if __name__ == '__main__':
@@ -27,13 +29,33 @@ if __name__ == '__main__':
         p = Parser(code, filename=cf)
         p.parse()
 
-        opt = Optimizer(p)
-        opt.optimize()
+        if not p.got_errors:
+            opt = Optimizer(p)
+            opt.optimize()
 
-        trans = Translator(p)
-        trans.translate()
+            trans = Translator(p)
+            trans.translate()
 
-        insts = trans.get_instructions()
+            insts = trans.get_instructions()
+            code = '\n'.join(insts)
 
-        print('\n'.join(insts))
+            asm = Assembler(code)
+            asm.parse()
+            asm.fix_labels()
+
+        if not asm.got_errors:
+            for word in asm.get_words():
+                print(hex(word)[2:].zfill(4) + ' ')
+
+    for af in asm_files:
+        with open(af, 'r') as f:
+            code = f.read()
+
+        asm = Assembler(code, filename=af)
+        asm.parse()
+        asm.fix_labels()
+        if not asm.got_errors:
+            for word in asm.get_words():
+                print(hex(word)[2:].zfill(4) + ' ')
+
 
