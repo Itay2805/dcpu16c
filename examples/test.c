@@ -1,9 +1,15 @@
 int main();
 
-int add(int a, int b) {
-    return a + b;
+int mul(int _a, int _times) {
+    register int num = 0;
+    register int a = _a;
+    register int times = _times;
+    while (times--) {
+        num += a;
+    }
+    return num;
 }
 
 int main() {
-    return add(1, 3);
+    return mul(5, 5);
 }

@@ -38,6 +38,7 @@ if __name__ == '__main__':
 
             insts = trans.get_instructions()
             code = '\n'.join(insts)
+            print(code)
 
             asm = Assembler(code)
             asm.parse()

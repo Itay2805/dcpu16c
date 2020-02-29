@@ -188,7 +188,7 @@ class Translator:
         # setup function argument position
         if func.type.callconv == CallConv.STACKCALL:
             # For stack call all regs are passed on the stack
-            off = 1
+            off = 2
             for param in func.type.param_types:
                 sz = param.sizeof()
                 self._params.append(Offset(Reg.J, off))
@@ -198,7 +198,7 @@ class Translator:
             # For regcall the first free parameters are in A, B and C
             # The rest are passed on the stack
             regs = [Reg.C, Reg.B, Reg.A]
-            off = 1
+            off = 2
             for param in func.type.param_types:
                 if len(regs) != 0:
                     r = regs.pop()

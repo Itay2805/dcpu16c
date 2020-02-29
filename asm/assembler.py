@@ -61,7 +61,7 @@ class Assembler(Tokenizer):
     ####################################################################################################################
 
     def _emit_word(self, word):
-        self._words.append(word)
+        self._words.append(word & 0xFFFF)
         self._pos += 1
 
     def get_words(self):
