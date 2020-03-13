@@ -22,6 +22,9 @@ class Assembler(Tokenizer):
         self._externs = []
         self._globals = {}
 
+        self._global_relocations = []
+        self._local_relocations = []
+
         self.next_token()
         self.got_errors = False
 
@@ -42,6 +45,7 @@ class Assembler(Tokenizer):
             if lbl.name in self._lbls:
                 self._pos = lbl.pos
                 self._words[self._pos] += self._lbls[lbl.name]
+                self._local_relocations.append(lbl.pos)
             else:
                 unknown.append(lbl)
         self._pos = orig
@@ -49,12 +53,17 @@ class Assembler(Tokenizer):
         for lbl in unknown:
             if lbl.name not in self._externs:
                 self.report_error(f'undefined symbol `{lbl.name}` referenced')
+            else:
+                self._global_relocations.append((lbl.name, lbl.pos))
 
         for glob in self._globals:
             if glob not in self._lbls:
                 self.report_error(f'global defiend for undefined symbol `{glob}`')
             else:
                 self._globals[glob] = self._lbls[glob]
+
+    def get_object(self):
+        return self.get_words(), self._global_relocations, self._local_relocations, self._lbls
 
     ####################################################################################################################
     # Assembling
@@ -81,7 +90,6 @@ class Assembler(Tokenizer):
         if pos is None:
             if not isinstance(self.token, EofToken):
                 pos = self.token.pos
-
 
         if pos is not None:
             print(f'{Assembler.BOLD}{self.filename}:{pos.start_line + 1}:{pos.start_column + 1}:{Assembler.RESET} {col}{Assembler.BOLD}{typ}:{Assembler.RESET} {msg}')
@@ -356,10 +364,10 @@ class Assembler(Tokenizer):
             if self.match_token('.'):
                 if self.match_keyword('global'):
                     name, pos = self.expect_ident()
-                    # Will export it
+                    self._globals[name] = 0
                 elif self.match_keyword('extern'):
                     name, pos = self.expect_ident()
-                    # Will extern it
+                    self._externs.append(name)
                 elif self.match_keyword('dw'):
                     pass
             elif self.is_token(IdentToken):
