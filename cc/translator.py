@@ -178,7 +178,8 @@ class Translator:
 
         # label
         self._asm.put_instruction('')
-        self._asm.put_instruction(f'.global {func.name}')
+        if func.storage_decl != StorageClass.STATIC:
+            self._asm.put_instruction(f'.global {func.name}')
         self._asm.mark_label(func.name)
 
         # Function entry frame

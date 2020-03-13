@@ -1065,13 +1065,10 @@ class Parser(Tokenizer):
             elif self.match_token(';'):
                 pass
 
-            elif self.match_keyword('static'):
-                # this is a variable with a static
-                typ = self._parse_type(True)
-                self._parse_global_variable(typ, StorageClass.STATIC)
-
             # Either a global or a function
             else:
+                storage_class = self._parse_storage_decl(StorageClass.AUTO)
+
                 # We are gonna check if this is a variable or function
                 # if we get a `=` or `;` before a `(`, it is a variable
                 func = False
@@ -1098,6 +1095,9 @@ class Parser(Tokenizer):
 
                     name, name_pos = self.expect_ident()
 
+                    if storage_class == StorageClass.REGISTER:
+                        self.report_error(f'function definition declared `register`', name_pos)
+
                     if isinstance(ret_typ, CArray):
                         self.report_error(f'`{name}` declared asm function returning an array', name_pos)
 
@@ -1116,10 +1116,12 @@ class Parser(Tokenizer):
                     elif callconv is not None:
                         assert callconv == self.func.type.callconv
 
+                    self.func.storage_decl = storage_class
+
                     self._parse_func(name_pos, e is None)
 
                 else:
                     typ = self._parse_type(True)
 
                     if not self.match_token(';'):
-                        self._parse_global_variable(typ, StorageClass.AUTO)
+                        self._parse_global_variable(typ, storage_class)

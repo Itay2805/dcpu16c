@@ -6,6 +6,7 @@ class StorageClass(Enum):
     AUTO = auto()
     STATIC = auto()
     REGISTER = auto()
+    EXTERN = auto()
 
 
 class CType:

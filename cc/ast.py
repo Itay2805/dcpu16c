@@ -396,6 +396,7 @@ class Function:
         self.num_params = 0
         self.vars = []  # type: List[Variable]
 
+        self.storage_decl = StorageClass.AUTO
         self.prototype = False
         self.type = CFunction()
 

@@ -46,7 +46,7 @@ if __name__ == '__main__':
             code = '\n'.join(insts)
 
             if stop_at_comp:
-                with open(cf + '.dasm', 'r') as f:
+                with open(cf + '.dasm', 'w') as f:
                     f.write(code)
             else:
                 asm = Assembler(code, cf)

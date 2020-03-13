@@ -58,12 +58,12 @@ class Assembler(Tokenizer):
 
         for glob in self._globals:
             if glob not in self._lbls:
-                self.report_error(f'global defiend for undefined symbol `{glob}`')
+                self.report_error(f'global defined for undefined symbol `{glob}`')
             else:
                 self._globals[glob] = self._lbls[glob]
 
     def get_object(self):
-        return self.get_words(), self._global_relocations, self._local_relocations, self._lbls
+        return self.get_words(), self._global_relocations, self._local_relocations, self._globals
 
     ####################################################################################################################
     # Assembling
