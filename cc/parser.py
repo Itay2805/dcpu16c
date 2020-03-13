@@ -53,16 +53,23 @@ class Parser(Tokenizer):
         return ExprIdent(ident)
 
     def _def_var(self, name: str, typ: CType, storage: StorageClass) -> ExprIdent:
-        ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
+        if self.func is not None:
+            ret = self._define(name, VariableIdentifier(name, len(self.func.vars)))
+        else:
+            ret = self._define(name, GlobalIdentifier(name, len(self.global_vars)))
+
         if ret is None:
             return None
+
         var = Variable(ret.ident, typ, storage)
+
         if self.func is not None:
             self.func.vars.append(var)
             if storage == StorageClass.STATIC:
                 self.global_vars.append(var)
         else:
             self.global_vars.append(var)
+
         return ret
 
     def _def_param(self, name, typ) -> ExprIdent:
@@ -676,6 +683,11 @@ class Parser(Tokenizer):
                     self.report_error('multiple storage classes in declaration specifiers')
                 else:
                     spec = StorageClass.STATIC
+            elif self.match_keyword('extern'):
+                if spec != StorageClass.AUTO:
+                    self.report_error('multiple storage classes in declaration specifiers')
+                else:
+                    spec = StorageClass.EXTERN
             else:
                 break
         return spec
@@ -1040,11 +1052,29 @@ class Parser(Tokenizer):
     def _parse_global_variable(self, typ: CType, storage: StorageClass):
         storage = self._parse_storage_decl(storage)
 
-        typ = self._parse_type_prefix(typ)
-        name, name_pos = self.expect_ident()
-        typ = self._parse_type_postfix(typ, name_pos)
+        def parse_one_variable(typ):
+            typ = self._parse_type_prefix(typ)
+            name, name_pos = self.expect_ident()
+            typ = self._parse_type_postfix(typ, name_pos)
 
-        self._def_var(name, typ, storage)
+            if self.match_token('='):
+                new_value = self._parse_conditional()
+                if not new_value.is_constant(self):
+                    self.report_error(f'initializer element is not constant')
+
+                self._check_assignment(typ, new_value, 'initialization')
+            else:
+                new_value = None
+
+            # TODO: better handling of redifition
+            expr = self._def_var(name, typ, storage)
+            if expr is None:
+                self.report_error(f'redefinition of {name}', name_pos)
+            self.global_vars[expr.ident.index].value = new_value
+
+        parse_one_variable(typ)
+        while self.match_token(','):
+            parse_one_variable(typ)
 
         self.expect_token(';')
 

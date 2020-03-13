@@ -1,5 +1,5 @@
-int mul(int a, int b);
+extern int test;
 
 int main() {
-    return mul(5, 5);
+    return test;
 }

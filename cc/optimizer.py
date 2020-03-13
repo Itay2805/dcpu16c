@@ -248,6 +248,10 @@ class Optimizer:
     def optimize(self):
         last = str(self)
 
+        for f in self.parser.global_vars:
+            if f.value is not None:
+                f.value = self._constant_fold(f.value, False).value
+
         self._find_pure_functions()
         for f in self.parser.func_list:
             f.code = self._constant_fold(f.code, True)

@@ -163,11 +163,28 @@ class Translator:
 
         for var in self._ast.global_vars:
             # TODO: support constant value for global vars
-            if var.storage != StorageClass.STATIC:
+            if var.storage == StorageClass.EXTERN:
+                # Declare as an external symbol
+                self._asm.put_instruction(f'.extern {var.ident.name}')
+            else:
                 # Declare asm a global symbol if not a static variable
-                self._asm.put_instruction(f'.global {var.ident.name}')
-            self._asm.mark_label(f'{var.ident.name}')
-            self._asm.emit_word(0)
+                if var.storage != StorageClass.STATIC:
+                    self._asm.put_instruction(f'.global {var.ident.name}')
+                self._asm.mark_label(f'{var.ident.name}')
+
+                if var.value is not None:
+                    # Has a value!
+                    if isinstance(var.value, int):
+                        self._asm.emit_word(var.value)
+                    else:
+                        assert False, f'got {var.value}'
+                else:
+                    # Does not have a value, reset to 0
+                    sz = var.typ.sizeof()
+                    if sz % 2 == 1:
+                        sz += 1
+                    for i in range(sz // 2):
+                        self._asm.emit_word(0)
 
     def _translate_function(self, func: Function):
         # TODO: static functions
@@ -425,6 +442,12 @@ class Translator:
                     return ident.name
                 else:
                     self._asm.emit_set(dest, ident.name)
+
+            elif isinstance(ident, GlobalIdentifier):
+                if dest is None:
+                    return Deref(ident.name)
+                else:
+                    self._asm.emit_set(dest, Deref(ident.name))
             else:
                 assert False
 

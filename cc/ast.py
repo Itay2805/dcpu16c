@@ -30,6 +30,12 @@ class VariableIdentifier(Identifier):
         super(VariableIdentifier, self).__init__(name, index)
 
 
+class GlobalIdentifier(Identifier):
+
+    def __init__(self, name, index):
+        super(GlobalIdentifier, self).__init__(name, index)
+
+
 ########################################################################################################################
 # Expressions
 ########################################################################################################################
@@ -37,6 +43,9 @@ class VariableIdentifier(Identifier):
 class Expr:
 
     def is_pure(self, parser):
+        raise NotImplementedError()
+
+    def is_constant(self, parser):
         raise NotImplementedError()
 
     def resolve_type(self, ast) -> CType:
@@ -52,6 +61,9 @@ class ExprNop(Expr):
         self.pos = None
 
     def is_pure(self, parser):
+        return True
+
+    def is_constant(self, parser):
         return True
 
     def __str__(self, ident=''):
@@ -71,6 +83,9 @@ class ExprString(Expr):
         return CArray(CInteger(16, True), len(self.value))
 
     def is_pure(self, parser):
+        return True
+
+    def is_constant(self, parser):
         return True
 
     def __str__(self, ident=''):
@@ -95,6 +110,9 @@ class ExprNumber(Expr):
     def is_pure(self, parser):
         return True
 
+    def is_constant(self, parser):
+        return True
+
     def __str__(self, ident=''):
         return str(self.value)
 
@@ -117,11 +135,25 @@ class ExprIdent(Expr):
             return ast.func_list[self.ident.index].type
         elif isinstance(self.ident, ParameterIdentifier):
             return ast.func.type.param_types[self.ident.index]
+        elif isinstance(self.ident, GlobalIdentifier):
+            return ast.global_vars[self.ident.index].typ
         else:
             assert False
 
     def is_pure(self, parser):
         return True
+
+    def is_constant(self, parser):
+        if isinstance(self.ident, VariableIdentifier):
+            return False
+        elif isinstance(self.ident, FunctionIdentifier):
+            return True
+        elif isinstance(self.ident, ParameterIdentifier):
+            return False
+        elif isinstance(self.ident, GlobalIdentifier):
+            return False
+        else:
+            assert False
 
     def __str__(self, ident=''):
         return self.ident.name
@@ -162,6 +194,9 @@ class ExprBinary(Expr):
     def is_pure(self, parser):
         return self.left.is_pure(parser) and self.right.is_pure(parser)
 
+    def is_constant(self, parser):
+        return self.left.is_constant(parser) and self.right.is_constant(parser)
+
     def __str__(self, ident=''):
         return ident + f'({self.left} {self.op} {self.right})'
 
@@ -179,6 +214,9 @@ class ExprCast(Expr):
     def is_pure(self, parser):
         return self.expr.is_pure(parser)
 
+    def is_constant(self, parser):
+        return self.expr.is_constant(parser)
+
     def __str__(self):
         return f'(cast {self.expr} {self.typ})'
 
@@ -193,6 +231,9 @@ class ExprLoop(Expr):
     def is_pure(self, parser):
         return False
 
+    def is_constant(self, parser):
+        return False
+
     def __str__(self, ident=''):
         return ident + f'(loop {self.cond} {self.body})'
 
@@ -205,6 +246,9 @@ class ExprBreak(Expr):
     def is_pure(self, parser):
         return False
 
+    def is_constant(self, parser):
+        return False
+
     def __str__(self, ident=''):
         return ident + f'(break)'
 
@@ -215,6 +259,9 @@ class ExprContinue(Expr):
         self.pos = pos
 
     def is_pure(self, parser):
+        return False
+
+    def is_constant(self, parser):
         return False
 
     def __str__(self, ident=''):
@@ -239,6 +286,9 @@ class ExprAddrof(Expr):
     def is_pure(self, parser):
         return True
 
+    def is_constant(self, parser):
+        return True
+
     def __str__(self, ident=''):
         return ident + f'(addrof {self.expr})'
 
@@ -260,6 +310,9 @@ class ExprDeref(Expr):
 
     def is_pure(self, parser):
         # return True
+        return False
+
+    def is_constant(self, parser):
         return False
 
     def __str__(self, ident=''):
@@ -289,6 +342,9 @@ class ExprCall(Expr):
             return called_function.pure_known and called_function.pure and len([x for x in self.args if x.is_pure(parser)]) == 0
         return False
 
+    def is_constant(self, parser):
+        return False
+
     def __str__(self, ident=''):
         s = ident + f'(call {self.func} ('
         args = []
@@ -309,6 +365,9 @@ class ExprCopy(Expr):
         return self.destination.resolve_type(ast)
 
     def is_pure(self, parser):
+        return False
+
+    def is_constant(self, parser):
         return False
 
     def __str__(self, ident=''):
@@ -349,6 +408,12 @@ class ExprComma(Expr):
                 return False
         return True
 
+    def is_constant(self, parser):
+        for expr in self.exprs:
+            if not expr.is_constant(parser):
+                return False
+        return True
+
     def __str__(self, ident=''):
         s = []
         for expr in self.exprs:
@@ -371,6 +436,9 @@ class ExprReturn(Expr):
     def is_pure(self, parser):
         return False
 
+    def is_constant(self, parser):
+        return False
+
     def __str__(self, ident=''):
         return ident + f'(return {self.expr})'
 
@@ -386,6 +454,7 @@ class Variable:
         self.ident = ident
         self.typ = typ
         self.storage = storage
+        self.value = None
 
 
 class Function:

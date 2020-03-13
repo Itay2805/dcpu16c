@@ -336,6 +336,7 @@ class Tokenizer:
                 'static',
                 'const',
                 'inline',
+                'extern',
 
                 'sizeof',
                 'asm',

@@ -252,6 +252,11 @@ class Assembler(Tokenizer):
                 self.next_token()
                 self.expect_token(']')
                 return 0x1E, val
+            elif self.is_token(IdentToken):
+                val = self.token.value
+                self.next_token()
+                self.expect_token(']')
+                return 0x1E, val
             else:
                 assert False
         elif self.is_token(IntToken):
@@ -369,7 +374,14 @@ class Assembler(Tokenizer):
                     name, pos = self.expect_ident()
                     self._externs.append(name)
                 elif self.match_keyword('dw'):
-                    pass
+                    if self.is_token(IntToken):
+                        val = self.token.value
+                        self.next_token()
+                        self._emit_word(val)
+                    elif self.is_token(IdentToken):
+                        assert False
+                    else:
+                        self.report_error('invalid value for .dw')
             elif self.is_token(IdentToken):
                 val = self.token.value
                 self._mark_label(val)
