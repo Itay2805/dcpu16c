@@ -180,10 +180,7 @@ class Translator:
                         assert False, f'got {var.value}'
                 else:
                     # Does not have a value, reset to 0
-                    sz = var.typ.sizeof()
-                    if sz % 2 == 1:
-                        sz += 1
-                    for i in range(sz // 2):
+                    for i in range(var.typ.sizeof()):
                         self._asm.emit_word(0)
 
     def _translate_function(self, func: Function):
@@ -319,6 +316,8 @@ class Translator:
             self._asm.mark_label(end_lbl)
 
         elif isinstance(expr, ExprBinary):
+            print(f'{expr}')
+
             # Setup the type
             typ = expr.resolve_type(self._ast)
             if isinstance(typ, CInteger):
@@ -329,58 +328,88 @@ class Translator:
                 assert False, f'`{typ}` ({type(typ)})'
 
             if dest is None:
-                # This allows for doing maths on operands at compile time
-                left = self._translate_expr(expr.left, None)
-                right = self._translate_expr(expr.right, None)
-                if isinstance(left, Offset) and isinstance(right, int):
-                    return Offset(left.a, eval(f'{left.offset} {expr.op} {right}'))
-                elif isinstance(right, Offset) and isinstance(left, int):
-                    return Offset(right.a, eval(f'{right.offset} {expr.op} {left}'))
-                elif isinstance(left, Reg) and isinstance(right, int):
-                    return Offset(left, right if expr.op == '+' else -right)
-                elif isinstance(right, Reg) and isinstance(left, int):
-                    return Offset(right, left if expr.op == '+' else -left)
+
+                # Sometimes we can find && because of `if`
+                if expr.op == '&&':
+                    end = self._asm.make_label()
+
+                    # Run the first part, jump to end if the result is 0
+                    if self._can_resolve_to_operand(expr.left):
+                        reg = self._translate_expr(expr.left, None)
+                        self._asm.emit_ife(reg, 0)
+                        self._asm.emit_set(Reg.PC, end)
+                    else:
+                        reg = self._alloc_scratch()
+                        self._translate_expr(expr.left, reg)
+                        self._asm.emit_ife(reg, 0)
+                        self._asm.emit_set(Reg.PC, end)
+                        self._free_scratch(reg)
+
+                    self._translate_expr(expr.right, None)
+                    self._asm.mark_label(end)
+
                 else:
-                    assert False, f'`{left}` and `{right}`'
+                    # This allows for doing maths on operands at compile time
+                    left = self._translate_expr(expr.left, None)
+                    right = self._translate_expr(expr.right, None)
+
+                    if isinstance(left, Offset) and isinstance(right, int):
+                        return Offset(left.a, eval(f'{left.offset} {expr.op} {right}'))
+                    elif isinstance(right, Offset) and isinstance(left, int):
+                        return Offset(right.a, eval(f'{right.offset} {expr.op} {left}'))
+                    elif isinstance(left, Reg) and isinstance(right, int):
+                        return Offset(left, right if expr.op == '+' else -right)
+                    elif isinstance(right, Reg) and isinstance(left, int):
+                        return Offset(right, left if expr.op == '+' else -left)
+                    else:
+                        assert False, f'`{expr}` -> `{left}` and `{right}`'
 
             else:
-                # Translate the left side on the result register
-                self._translate_expr(expr.left, dest)
+                if expr.op in '+-*/%&|^':
+                    # For these it is worth more to eval to the dest
 
-                # Translate the right to a temp one
-                if self._can_resolve_to_operand(expr.right):
-                    reg = self._translate_expr(expr.right, None)
-                else:
-                    reg = self._alloc_scratch()
-                    self._translate_expr(expr.right, reg)
+                    # Translate the left side on the result register
+                    self._translate_expr(expr.left, dest)
 
-                # Emit the addition, with dest asm the destination
-                if expr.op == '+':
-                    self._asm.emit_add(dest, reg)
-                elif expr.op == '-':
-                    self._asm.emit_sub(dest, reg)
-                elif expr.op == '*':
-                    self._asm.emit_mul(dest, reg)
-                elif expr.op == '/':
-                    if typ.signed:
-                        self._asm.emit_dvi(dest, reg)
+                    # Translate the right to a temp one
+                    if self._can_resolve_to_operand(expr.right):
+                        reg = self._translate_expr(expr.right, None)
                     else:
-                        self._asm.emit_div(dest, reg)
-                elif expr.op == '%':
-                    if typ.signed:
-                        self._asm.emit_mdi(dest, reg)
+                        reg = self._alloc_scratch()
+                        self._translate_expr(expr.right, reg)
+
+                    # Emit the addition, with dest asm the destination
+                    if expr.op == '+':
+                        self._asm.emit_add(dest, reg)
+                    elif expr.op == '-':
+                        self._asm.emit_sub(dest, reg)
+                    elif expr.op == '*':
+                        self._asm.emit_mul(dest, reg)
+                    elif expr.op == '/':
+                        if typ.signed:
+                            self._asm.emit_dvi(dest, reg)
+                        else:
+                            self._asm.emit_div(dest, reg)
+                    elif expr.op == '%':
+                        if typ.signed:
+                            self._asm.emit_mdi(dest, reg)
+                        else:
+                            self._asm.emit_mod(dest, reg)
+                    elif expr.op == '&':
+                        self._asm.emit_and(dest, reg)
+                    elif expr.op == '|':
+                        self._asm.emit_bor(dest, reg)
+                    elif expr.op == '^':
+                        self._asm.emit_xor(dest, reg)
                     else:
-                        self._asm.emit_mod(dest, reg)
-                elif expr.op == '&':
-                    self._asm.emit_and(dest, reg)
-                elif expr.op == '|':
-                    self._asm.emit_bor(dest, reg)
-                elif expr.op == '^':
-                    self._asm.emit_xor(dest, reg)
+                        assert False
+
+                elif expr.op in ['==']:
+                    # For these we should just allocate another register
+                    self._alloc_scratch()
+
                 else:
                     assert False
-
-                # TODO: Handle ||, &&, ==...
 
                 # Free the scratch register
                 if not self._can_resolve_to_operand(expr.right):

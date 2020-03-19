@@ -471,20 +471,19 @@ class Parser(Tokenizer):
             return ExprNumber(xtype, self._combine_pos(pos, self.token.pos))
 
         # Type cast
-        # self.push()
-        # if self.match_token('('):
-        #     typ = self._parse_type(False)
-        #     if typ is not None:
-        #         self.discard()
-        #         self.expect_token(')')
-        #         expr = self._parse_prefix()
-        #         # expr_type = expr.resolve_type(self.current_function)
-        #         # TODO: when we add structs we will need to check for none-scalar type
-        #         return ExprCast(self._expand_pos(pos, self.token.pos), expr, typ)
-        #     else:
-        #         self.pop()
-        # else:
-        #     self.pop()
+        elif self.is_token('('):
+            self.save()
+            self.next_token()
+            typ = self._parse_type(False)
+            if typ is not None:
+                self.discard()
+                typ = self._parse_type_prefix(typ)
+                self.expect_token(')')
+                # TODO: check the cast is actually doable
+                # TODO: Compound literal
+                return ExprCast(self._parse_prefix(), typ)
+            else:
+                self.restore()
 
         return self._parse_postfix()
 
@@ -518,7 +517,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_additive()
             self._check_binary_op(op, pos, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_relational(self):
@@ -565,7 +564,7 @@ class Parser(Tokenizer):
             self.next_token()
             e2 = self._parse_equality()
             self._check_binary_op(op, pos, e1, e2)
-            e1 = ExprBinary(e1, op.value, e2, self._combine_pos(e1.pos, e2.pos))
+            e1 = ExprBinary(e1, op, e2, self._combine_pos(e1.pos, e2.pos))
         return e1
 
     def _parse_bitwise_or(self):
@@ -1149,6 +1148,8 @@ class Parser(Tokenizer):
                     self.func.storage_decl = storage_class
 
                     self._parse_func(name_pos, e is None)
+
+                    self.func = None
 
                 else:
                     typ = self._parse_type(True)

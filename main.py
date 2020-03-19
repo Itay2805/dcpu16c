@@ -34,6 +34,7 @@ if __name__ == '__main__':
 
         p = Parser(code, filename=cf)
         p.parse()
+        print(p.func_list[1])
 
         if not p.got_errors:
             opt = Optimizer(p)

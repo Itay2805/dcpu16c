@@ -241,7 +241,7 @@ class Optimizer:
                 return ExprNop()
 
         elif isinstance(expr, ExprCast):
-            expr.expr = self._constant_fold(expr.expr, False)
+            expr = self._constant_fold(expr.expr, False)
 
         return expr
 

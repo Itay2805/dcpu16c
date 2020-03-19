@@ -1,0 +1,16 @@
+.extern main
+
+putc:
+SET PUSH, J
+SET J, SP
+SET [J + 2], 5
+ADD [J + 2], [J + 2]
+SET SP, J
+SET J, POP
+SET PC, POP
+video_ram:
+.dw 32768
+x:
+.dw 0
+y:
+.dw 0

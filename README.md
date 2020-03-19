@@ -6,6 +6,17 @@ The reason I am creating this compiler is so I can eventually use it to write
 some simple OS for the DCPU16, and because I like C and I can't find anything 
 that I can port easily I will just create my own :shrug:
 
+## Invoking
+
+simply run 
+```shell script
+./main.py <files>
+```
+
+### Arguments
+#### Stop at assembly stage - `-S`
+This will create `.dasm` file for every input file. This will not generate any assembly.
+
 ## Example 
 
 ```c
@@ -68,6 +79,8 @@ To specify which calling convention to use simply add `__regcall` or `__stackcal
 calling convention is `__stackcall`.
 
 ## Working
+* multiple compilation units
+    * will link everything correctly
 * typedefs 
 * structs and unions
     * can be nested
@@ -77,7 +90,8 @@ calling convention is `__stackcall`.
     * regcall call is still wip 
 * Variables (only at the start of functions)
     * register storage class is supported
-* fixed size arrays
+* Global variables
+* Fixed size arrays
 * All of the arithmetic/bitwise operators
 * While loops with break and continue
 * if/else (No code gen yet)

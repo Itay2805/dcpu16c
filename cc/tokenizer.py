@@ -263,6 +263,17 @@ class Tokenizer:
             self._inc_stream()
             ch = self.stream[0]
             self._inc_stream()
+            if ch == '\\':
+                ch = self.stream[0]
+                if ch == 'n':
+                    ch = '\n'
+                elif ch == 't':
+                    ch = '\t'
+                elif ch == '\0':
+                    ch = '\0'
+                else:
+                    self._syntax_error(f'invalid escape sequence `\\{ch}`')
+                self._inc_stream()
             if self.stream[0] != '\'':
                 self._syntax_error(f'expected `\'`, got `{self.stream[0]}`')
             self._inc_stream()

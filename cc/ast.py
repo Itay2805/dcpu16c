@@ -177,19 +177,25 @@ class ExprBinary(Expr):
         ltyp = self.left.resolve_type(ast)
         rtyp = self.right.resolve_type(ast)
 
-        if self.op in ['<<', '>>', '+', '-', '*', '/', '%']:
+        if self.op in ['+', '-']:
             # just use the type of the left element unless the right is a pointer
             # and then use the right
             if isinstance(rtyp, CPointer):
                 return rtyp
             else:
                 return ltyp
-        elif self.op in ['==', '||', '&&', '<=', '>=', '<', '>']:
+        elif self.op in ['==', '||', '&&', '<=', '>=', '<', '>', '!']:
             # Logical operations always return an int
             # TODO: Make it return a boolean instead
             return CInteger(16, False)
+        elif self.op in ['|', '~', '&', '^', '<<', '>>', '*', '/', '%']:
+            # All these are arith operators and they return the larger value
+            if ltyp.sizeof() > rtyp.sizeof():
+                return ltyp
+            else:
+                return rtyp
         else:
-            assert False
+            assert False, self.op
 
     def is_pure(self, parser):
         return self.left.is_pure(parser) and self.right.is_pure(parser)
